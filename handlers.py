@@ -13,7 +13,6 @@ router = Router()
 
 class DisputeState(StatesGroup):
     waiting_room_name = State()
-    
     in_room = State()
 
 
