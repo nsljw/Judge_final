@@ -3,3 +3,6 @@ venv
 /venv
 .venv
 __pyche__
+bot.log
+documents
+bot.session-journal
