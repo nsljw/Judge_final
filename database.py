@@ -1,4 +1,3 @@
-# database.py
 import uuid
 import asyncpg
 from typing import Optional, List, Dict
@@ -16,149 +15,169 @@ class Database:
 
     async def create_tables(self):
         async with self.pool.acquire() as conn:
-            # Таблица дел
+            # дела
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS cases (
                     id SERIAL PRIMARY KEY,
                     case_number VARCHAR(50) UNIQUE,
-                    plaintiff_id BIGINT,
-                    defendant_id BIGINT,
-                    subject TEXT,
+                    topic TEXT,
                     category VARCHAR(100),
-                    description TEXT,
                     claim_amount DECIMAL(15,2),
-                    status VARCHAR(50),
                     mode VARCHAR(20),
-                    group_id BIGINT,
-                    group_invite VARCHAR(500),
+                    plaintiff_id BIGINT,
+                    plaintiff_username VARCHAR(100),
+                    defendant_id BIGINT,
+                    defendant_username VARCHAR(100),
+                    status VARCHAR(50) DEFAULT 'active',
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
 
-            # Таблица участников
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS case_participants (
-                    id SERIAL PRIMARY KEY,
-                    case_id INTEGER REFERENCES cases(id),
-                    user_id BIGINT,
-                    username VARCHAR(100),
-                    role VARCHAR(50),
-                    description TEXT,
-                    added_at TIMESTAMP DEFAULT NOW()
-                )
-            ''')
-
-            # Таблица доказательств
+            # доказательства / аргументы
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS evidence (
                     id SERIAL PRIMARY KEY,
-                    case_id INTEGER REFERENCES cases(id),
+                    case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,
                     user_id BIGINT,
-                    type VARCHAR(50),
-                    content TEXT,
-                    file_path VARCHAR(500),
-                    description TEXT,
-                    added_at TIMESTAMP DEFAULT NOW()
-                )
-            ''')
-
-            # Таблица решений
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS decisions (
-                    id SERIAL PRIMARY KEY,
-                    case_id INTEGER REFERENCES cases(id),
-                    decision_text TEXT,
-                    established_facts TEXT,
-                    violations TEXT,
-                    verdict TEXT,
+                    role VARCHAR(50), -- plaintiff / defendant / witness
+                    type VARCHAR(50), -- text / photo / document
+                    content TEXT,     
+                    file_path VARCHAR(500), 
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
 
-    # ===== Методы работы с делами =====
-    async def create_case(self, plaintiff_id: int, subject: str, category: str,
-                          description: str, claim_amount: float, mode: str) -> str:
-        async with self.pool.acquire() as conn:
-            case_number = f"CASE-{uuid.uuid4().hex[:10].upper()}"
+            # решения
             await conn.execute('''
-                INSERT INTO cases (case_number, plaintiff_id, subject, category, 
-                                   description, claim_amount, status, mode)
-                VALUES ($1, $2, $3, $4, $5, $6, 'created', $7)
-            ''', case_number, plaintiff_id, subject, category, description,
-                               claim_amount, mode)
-            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number = $1', case_number)
-            await self.add_participant(case_id, plaintiff_id, None, 'истец', 'Инициатор спора')
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id SERIAL PRIMARY KEY,
+                    case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,
+                    decision_text TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            ''')
+
+            # приглашения с ссылкой
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS invitations (
+                    id SERIAL PRIMARY KEY,
+                    case_number VARCHAR(50),
+                    chat_id BIGINT,
+                    role VARCHAR(50),  -- defendant / witness
+                    invite_link TEXT,
+                    used BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            ''')
+
+    # ===== CRUD для дела =====
+    async def create_case(self, topic: str, category: str, claim_amount: Optional[float],
+                          mode: str, plaintiff_id: int, plaintiff_username: str, status='active') -> str:
+        async with self.pool.acquire() as conn:
+            case_number = f"CASE-{uuid.uuid4().hex[:8].upper()}"
+            await conn.execute('''
+                INSERT INTO cases (case_number, topic, status, category, claim_amount, mode, plaintiff_id, plaintiff_username)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            ''', case_number, topic, status, category, claim_amount, mode, plaintiff_id, plaintiff_username)
             return case_number
 
-    async def get_case_by_number(self, case_number: str) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow('SELECT * FROM cases WHERE case_number = $1', case_number)
-            return dict(row) if row else None
-
-    async def set_defendant(self, case_number: str, defendant_id: int, username: str):
-        async with self.pool.acquire() as conn:
-            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number = $1', case_number)
-            await conn.execute('UPDATE cases SET defendant_id = $1 WHERE case_number = $2',
-                               defendant_id, case_number)
-            await self.add_participant(case_id, defendant_id, username, 'ответчик',
-                                       'Лицо, к которому предъявлен иск')
-
-    async def add_participant(self, case_id: int, user_id: int, username: Optional[str],
-                              role: str, description: str):
+    async def set_defendant(self, case_number: str, defendant_id: int, defendant_username: str):
         async with self.pool.acquire() as conn:
             await conn.execute('''
-                INSERT INTO case_participants (case_id, user_id, username, role, description)
-                VALUES ($1, $2, $3, $4, $5)
-            ''', case_id, user_id, username, role, description)
-
-    async def get_case_participants(self, case_id: int) -> List[Dict]:
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch('SELECT * FROM case_participants WHERE case_id = $1 ORDER BY added_at', case_id)
-            return [dict(row) for row in rows]
-
-    async def add_evidence(self, case_id: int, user_id: int, evidence_type: str,
-                           content: str, file_path: Optional[str], description: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO evidence (case_id, user_id, type, content, file_path, description)
-                VALUES ($1, $2, $3, $4, $5, $6)
-            ''', case_id, user_id, evidence_type, content, file_path, description)
-
-    async def get_case_evidence(self, case_id: int) -> List[Dict]:
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch('SELECT * FROM evidence WHERE case_id = $1 ORDER BY added_at', case_id)
-            return [dict(row) for row in rows]
-
-    async def save_decision(self, case_id: int, decision_text: str, established_facts: str,
-                            violations: str, verdict: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO decisions (case_id, decision_text, established_facts, violations, verdict)
-                VALUES ($1, $2, $3, $4, $5)
-            ''', case_id, decision_text, established_facts, violations, verdict)
-
-    async def get_case_decision(self, case_id: int) -> Optional[Dict]:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow('SELECT * FROM decisions WHERE case_id = $1', case_id)
-            return dict(row) if row else None
-
-    async def set_case_group(self, case_number: str, group_id: int, invite_link: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                UPDATE cases 
-                SET group_id = $1, group_invite = $2, updated_at = NOW()
-                WHERE case_number = $3
-            ''', group_id, invite_link, case_number)
+                UPDATE cases SET defendant_id=$1, defendant_username=$2, updated_at=NOW()
+                WHERE case_number=$3
+            ''', defendant_id, defendant_username, case_number)
 
     async def update_case_status(self, case_number: str, status: str):
         async with self.pool.acquire() as conn:
             await conn.execute('''
-                   UPDATE cases
-                   SET status = $1,
-                       updated_at = NOW()
-                   WHERE case_number = $2
-               ''', status, case_number)
+                UPDATE cases SET status=$1, updated_at=NOW() WHERE case_number=$2
+            ''', status, case_number)
+
+    async def get_case_by_number(self, case_number: str) -> Optional[Dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT * FROM cases WHERE case_number=$1', case_number)
+            return dict(row) if row else None
+
+    async def get_user_cases(self, user_id: int) -> List[Dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT * FROM cases WHERE plaintiff_id=$1 OR defendant_id=$1 ORDER BY created_at DESC
+            ''', user_id)
+            return [dict(r) for r in rows]
+
+    # ===== Аргументы / доказательства =====
+    async def add_evidence(self, case_number: str, user_id: int, role: str,
+                           ev_type: str, content: Optional[str], file_path: Optional[str]):
+        async with self.pool.acquire() as conn:
+            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number=$1', case_number)
+            await conn.execute('''
+                INSERT INTO evidence (case_id, user_id, role, type, content, file_path)
+                VALUES ($1,$2,$3,$4,$5,$6)
+            ''', case_id, user_id, role, ev_type, content, file_path)
+
+    async def get_case_evidence(self, case_number: str) -> List[Dict]:
+        async with self.pool.acquire() as conn:
+            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number=$1', case_number)
+            rows = await conn.fetch('SELECT * FROM evidence WHERE case_id=$1 ORDER BY created_at', case_id)
+            return [dict(r) for r in rows]
+
+    # ===== Решение =====
+    async def save_decision(self, case_number: str, decision_text: str):
+        async with self.pool.acquire() as conn:
+            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number=$1', case_number)
+            await conn.execute('''
+                INSERT INTO decisions (case_id, decision_text) VALUES ($1,$2)
+            ''', case_id, decision_text)
+
+    async def get_case_decision(self, case_number: str) -> Optional[Dict]:
+        async with self.pool.acquire() as conn:
+            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number=$1', case_number)
+            row = await conn.fetchrow('SELECT * FROM decisions WHERE case_id=$1', case_id)
+            return dict(row) if row else None
+
+    # ===== ПРИГЛАШЕНИЯ =====
+    async def add_invitation(self, case_number: str, chat_id: int, role: str, invite_link: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO invitations (case_number, chat_id, role, invite_link)
+                VALUES ($1,$2,$3,$4)
+            ''', case_number, chat_id, role, invite_link)
+
+    async def get_active_invitations(self, chat_id: int) -> List[Dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT * FROM invitations WHERE chat_id=$1 AND used=FALSE
+            ''', chat_id)
+            return [dict(r) for r in rows]
+
+    async def mark_invitations_used(self, user_id: int, chat_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                UPDATE invitations SET used=TRUE WHERE chat_id=$1
+            ''', chat_id)
+
+    # ===== Участники дела =====
+    async def add_participant(self, case_number: str, user_id: int, username: str, role: str):
+        if role == "defendant":
+            await self.set_defendant(case_number, user_id, username)
+        else:
+            # witness или другие роли добавляем в evidence как отдельную таблицу или отдельный CRUD
+            await self.add_evidence(case_number, user_id, role, "text", None, None)
+
+    async def is_participant(self, case_number: str, user_id: int) -> bool:
+        case = await self.get_case_by_number(case_number)
+        if not case:
+            return False
+        if user_id in [case.get("plaintiff_id"), case.get("defendant_id")]:
+            return True
+        # проверка в evidence (для свидетелей)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT 1 FROM evidence WHERE case_id=$1 AND user_id=$2
+            ''', case["id"], user_id)
+            return bool(row)
 
 
 db = Database()

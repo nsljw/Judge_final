@@ -20,7 +20,6 @@ class PDFGenerator:
     def setup_fonts(self):
         """Настройка шрифтов для поддержки кириллицы"""
         try:
-            # Попытка использовать системные шрифты
             font_paths = [
                 '/System/Library/Fonts/Arial.ttf',  # macOS
                 '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
@@ -35,7 +34,6 @@ class PDFGenerator:
                     break
 
             if not font_found:
-                # Если системный шрифт не найден, используем встроенный
                 print("Системный шрифт не найден, используется встроенный шрифт")
 
         except Exception as e:
@@ -46,7 +44,6 @@ class PDFGenerator:
         styles = getSampleStyleSheet()
         font_available = 'CustomFont' in pdfmetrics.getRegisteredFontNames()
 
-        # Заголовок документа
         styles.add(ParagraphStyle(
             'CustomTitle',
             parent=styles['Title'],
@@ -57,7 +54,6 @@ class PDFGenerator:
             fontName='CustomFont' if font_available else 'Helvetica-Bold'
         ))
 
-        # Подзаголовки
         styles.add(ParagraphStyle(
             'CustomHeading',
             parent=styles['Heading2'],
@@ -68,7 +64,6 @@ class PDFGenerator:
             fontName='CustomFont' if font_available else 'Helvetica-Bold'
         ))
 
-        # Обычный текст
         styles.add(ParagraphStyle(
             'CustomNormal',
             parent=styles['Normal'],
@@ -78,7 +73,6 @@ class PDFGenerator:
             fontName='CustomFont' if font_available else 'Helvetica'
         ))
 
-        # Список
         styles.add(ParagraphStyle(
             'CustomBullet',
             parent=styles['Normal'],
@@ -109,12 +103,10 @@ class PDFGenerator:
 
         story = []
 
-        # Заголовок
         title = Paragraph("РЕШЕНИЕ ИИ-СУДЬИ", self.styles['CustomTitle'])
         story.append(title)
         story.append(Spacer(1, 0.5 * cm))
 
-        # Номер дела и дата
         case_info = f"по делу № {case_data.get('case_number', 'Н/Д')}"
         story.append(Paragraph(case_info, self.styles['CustomHeading']))
 
@@ -122,29 +114,25 @@ class PDFGenerator:
         story.append(Paragraph(f"Дата: {current_date}", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.3 * cm))
 
-        # Предмет спора
         subject = f"<b>Предмет спора:</b> {case_data.get('subject', 'Не указан')}"
         story.append(Paragraph(subject, self.styles['CustomNormal']))
         story.append(Spacer(1, 0.3 * cm))
 
-        # Сумма иска
         amount = case_data.get('claim_amount', 0)
         amount_text = f"<b>Сумма иска:</b> {amount:,.0f} USD." if amount else "<b>Сумма иска:</b> Не указана"
         story.append(Paragraph(amount_text, self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Состав арбитража
         story.append(Paragraph("СОСТАВ АРБИТРАЖА:", self.styles['CustomHeading']))
         if participants:
             participants_data = [[p.get('role', 'Неизвестно').title(),
-                                  f"@{p.get('username', 'неизвестно')}",
-                                  p.get('description', '')] for p in participants]
-            participants_table = Table(participants_data, colWidths=[3*cm, 4*cm, 8*cm])
+                                  f"@{p.get('username', 'неизвестно')}"]
+                                 for p in participants]
+
+            participants_table = Table(participants_data, colWidths=[5 * cm, 7 * cm])
             participants_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black)
             ]))
             story.append(participants_table)
@@ -152,7 +140,6 @@ class PDFGenerator:
             story.append(Paragraph("Участники не указаны", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Установленные факты
         story.append(Paragraph("УСТАНОВЛЕННЫЕ ФАКТЫ:", self.styles['CustomHeading']))
         for i, fact in enumerate(decision.get('established_facts', []), 1):
             story.append(Paragraph(f"{i}. {fact}", self.styles['CustomBullet']))
@@ -160,7 +147,6 @@ class PDFGenerator:
             story.append(Paragraph("Факты не установлены", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.3 * cm))
 
-        # Нарушения
         story.append(Paragraph("ВЫЯВЛЕННЫЕ НАРУШЕНИЯ:", self.styles['CustomHeading']))
         for i, violation in enumerate(decision.get('violations', []), 1):
             story.append(Paragraph(f"{i}. {violation}", self.styles['CustomBullet']))
@@ -168,36 +154,33 @@ class PDFGenerator:
             story.append(Paragraph("Нарушения не выявлены", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Решение
         story.append(Paragraph("РЕШЕНИЕ:", self.styles['CustomHeading']))
         story.append(Paragraph(decision.get('decision', 'Решение не вынесено'), self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Постановил (берём из verdict от GeminiService!)
+        # === ФИКС: используем amount_awarded ===
         story.append(Paragraph("ПОСТАНОВИЛ:", self.styles['CustomHeading']))
 
         verdict = decision.get('verdict', {})
-        if verdict.get('claim_satisfied'):
-            story.append(Paragraph(
-                f"1. Удовлетворить иск частично на сумму {verdict.get('amount_awarded', 0):,.0f} USD.",
-                self.styles['CustomBullet']
-            ))
+        claim_amount = case_data.get('claim_amount', 0)
+        awarded = verdict.get('awarded') or 0  # если None → станет 0
+
+        if verdict.get('claim_satisfied') and awarded > 0:
+            if awarded < claim_amount:
+                story.append(Paragraph(
+                    f"1. Удовлетворить иск частично, взыскать {awarded:,.0f} USD.",
+                    self.styles['CustomBullet']
+                ))
+            else:
+                story.append(Paragraph(
+                    f"1. Удовлетворить иск полностью на сумму {awarded:,.0f} USD.",
+                    self.styles['CustomBullet']
+                ))
         else:
             story.append(Paragraph("1. В иске отказать.", self.styles['CustomBullet']))
 
-        story.append(Paragraph(
-            f"2. Взыскать судебные расходы в размере {verdict.get('court_costs', 0)} токенов Disput.",
-            self.styles['CustomBullet']
-        ))
-
-        from conf import settings
-        story.append(Paragraph(
-            f"   Адрес кошелька для перевода: <font name='Courier'>{settings.DISPUTE_TOKEN_WALLET}</font>",
-            self.styles['CustomBullet']
-        ))
         story.append(Spacer(1, 0.3 * cm))
 
-        # Обоснование (берём reasoning тоже из Gemini!)
         if decision.get('reasoning'):
             story.append(Paragraph("ОБОСНОВАНИЕ:", self.styles['CustomHeading']))
             story.append(Paragraph(decision['reasoning'], self.styles['CustomNormal']))
@@ -211,17 +194,11 @@ class PDFGenerator:
         return buffer.getvalue()
 
     def save_pdf_to_file(self, pdf_data: bytes, filename: str) -> str:
-        """Сохранение PDF в файл"""
-
-        # Создаем папку для документов если не существует
         docs_dir = "documents"
         os.makedirs(docs_dir, exist_ok=True)
-
         filepath = os.path.join(docs_dir, filename)
-
         with open(filepath, 'wb') as f:
             f.write(pdf_data)
-
         return filepath
 
 

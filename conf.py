@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
     DATABASE_URL: str = os.getenv("DATABASE_URL")
     DISPUTE_TOKEN_WALLET: str = os.getenv("DISPUTE_TOKEN_WALLET")
+    BOT_USERNAME: str = os.getenv("BOT_USERNAME")
 
     class Config:
         env_file = ".env"

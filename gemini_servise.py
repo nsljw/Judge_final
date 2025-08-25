@@ -47,26 +47,40 @@ class GeminiService:
         except Exception as e:
             return f"Не удалось сгенерировать обоснование из-за ошибки: {str(e)}"
 
-    async def generate_full_decision(self, case_data: Dict, participants: List[Dict], evidence: List[Dict]) -> Dict:
+    async def generate_full_decision(
+            self,
+            case_data: Dict,
+            participants: List[Dict],
+            evidence: List[Dict],
+            no_evidence: bool = False
+    ) -> Dict:
         """
         Генерация полного постановления и решения (JSON).
         """
+        instruction = """Ты — ИИ судья. Рассмотри дело и сформируй полное постановление. 
+    Учитывай предоставленные вещественные доказательства."""
+
+        if no_evidence:
+            instruction += "\n⚠️ Внимание: доказательства не предоставлены. Решение нужно вынести только на основании аргументов сторон."
+
+        instruction += """
+    Верни JSON строго в формате:
+    {
+      "established_facts": ["факт1", "факт2"],
+      "violations": ["нарушение1", "нарушение2"],
+      "decision": "Текст итогового решения",
+      "verdict": {
+          "claim_satisfied": true/false,
+          "amount_awarded": число,
+          "court_costs": число
+      },
+      "reasoning": "Подробное обоснование решения (текст)"
+    }"""
+
         messages = self._build_multimodal_prompt(
-            """Ты — ИИ судья. Рассмотри дело и сформируй полное постановление.
-Верни JSON строго в формате:
-{
-  "established_facts": ["факт1", "факт2"],
-  "violations": ["нарушение1", "нарушение2"],
-  "decision": "Текст итогового решения",
-  "verdict": {
-      "claim_satisfied": true/false,
-      "amount_awarded": число,
-      "court_costs": число
-  },
-  "reasoning": "Подробное обоснование решения (текст)"
-}""",
-            case_data, participants, evidence
+            instruction, case_data, participants, evidence
         )
+
         try:
             response = self.model.generate_content(messages)
             return self._parse_analysis_response(response.text)
