@@ -1,9 +1,11 @@
-# aiofiles==24.1.0
-# aiogram==3.21.0
-# aiohappyeyeballs==2.6.1
-# aiohttp==3.12.15
-# aiosignal==1.4.0
+aiofiles==24.1.0
+aiogram==3.21.0
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.15
+aiosignal==1.4.0
 annotated-types==0.7.0
+async-timeout==5.0.1
+asyncpg==0.30.0
 attrs==25.3.0
 cachetools==5.5.2
 certifi==2025.8.3
@@ -23,6 +25,7 @@ httplib2==0.22.0
 idna==3.10
 magic-filter==1.0.12
 multidict==6.6.4
+pdf-generator==1.2.0
 pillow==11.3.0
 propcache==0.3.2
 proto-plus==1.26.1
@@ -30,11 +33,12 @@ protobuf==5.29.5
 psycopg2-binary==2.9.10
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
-pydantic==2.11.7
+pydantic-settings==2.10.1
 pydantic_core==2.33.2
 PyMuPDF==1.26.3
 pyparsing==3.2.3
 python-dotenv==1.1.1
+reportlab==4.4.3
 requests==2.32.4
 rsa==4.9.1
 tqdm==4.67.1
@@ -42,5 +46,4 @@ typing-inspection==0.4.1
 typing_extensions==4.14.1
 uritemplate==4.2.0
 urllib3==2.5.0
-wheel==0.45.1
 yarl==1.20.1
