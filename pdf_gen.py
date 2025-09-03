@@ -1,48 +1,44 @@
-from reportlab.lib.pagesizes import A4, letter
+from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch, cm
+from reportlab.lib.units import cm
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 import os
 import io
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 
 class PDFGenerator:
     def __init__(self):
-        self.setup_fonts()
+        self.font_name = self.setup_fonts()
         self.styles = self.create_custom_styles()
 
-    def setup_fonts(self):
+    def setup_fonts(self) -> str:
         """Настройка шрифтов для поддержки кириллицы"""
-        try:
-            font_paths = [
-                '/System/Library/Fonts/Arial.ttf',  # macOS
-                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
-                'C:/Windows/Fonts/arial.ttf',  # Windows
-            ]
+        font_paths = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
+            '/System/Library/Fonts/Supplemental/Arial.ttf',     # macOS
+            'C:/Windows/Fonts/arial.ttf',                       # Windows
+        ]
 
-            font_found = False
-            for font_path in font_paths:
-                if os.path.exists(font_path):
+        for font_path in font_paths:
+            if os.path.exists(font_path):
+                try:
                     pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-                    font_found = True
-                    break
+                    return 'CustomFont'
+                except Exception as e:
+                    print(f"Ошибка загрузки шрифта {font_path}: {e}")
 
-            if not font_found:
-                print("Системный шрифт не найден, используется встроенный шрифт")
-
-        except Exception as e:
-            print(f"Ошибка настройки шрифтов: {e}")
+        print("⚠️ Системный шрифт не найден, используется Helvetica (без кириллицы)")
+        return 'Helvetica'
 
     def create_custom_styles(self):
         """Создание пользовательских стилей"""
         styles = getSampleStyleSheet()
-        font_available = 'CustomFont' in pdfmetrics.getRegisteredFontNames()
 
         styles.add(ParagraphStyle(
             'CustomTitle',
@@ -51,7 +47,7 @@ class PDFGenerator:
             spaceAfter=20,
             alignment=TA_CENTER,
             textColor=colors.black,
-            fontName='CustomFont' if font_available else 'Helvetica-Bold'
+            fontName=self.font_name
         ))
 
         styles.add(ParagraphStyle(
@@ -61,7 +57,7 @@ class PDFGenerator:
             spaceAfter=12,
             spaceBefore=12,
             textColor=colors.black,
-            fontName='CustomFont' if font_available else 'Helvetica-Bold'
+            fontName=self.font_name
         ))
 
         styles.add(ParagraphStyle(
@@ -70,7 +66,7 @@ class PDFGenerator:
             fontSize=11,
             spaceAfter=6,
             alignment=TA_JUSTIFY,
-            fontName='CustomFont' if font_available else 'Helvetica'
+            fontName=self.font_name
         ))
 
         styles.add(ParagraphStyle(
@@ -79,17 +75,14 @@ class PDFGenerator:
             fontSize=11,
             spaceAfter=3,
             leftIndent=20,
-            fontName='CustomFont' if font_available else 'Helvetica'
+            fontName=self.font_name
         ))
 
         return styles
 
     def generate_verdict_pdf(self, case_data: Dict, decision: Dict,
                              participants: List[Dict], evidence: List[Dict]) -> bytes:
-        """
-        Генерация PDF документа с вердиктом.
-        decision = полный результат от GeminiService.generate_full_decision()
-        """
+        """Генерация PDF документа с вердиктом"""
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -103,10 +96,11 @@ class PDFGenerator:
 
         story = []
 
-        title = Paragraph("РЕШЕНИЕ ИИ-СУДЬИ", self.styles['CustomTitle'])
-        story.append(title)
+        # Заголовок
+        story.append(Paragraph("РЕШЕНИЕ ИИ-СУДЬИ", self.styles['CustomTitle']))
         story.append(Spacer(1, 0.5 * cm))
 
+        # Дело
         case_info = f"по делу № {case_data.get('case_number', 'Н/Д')}"
         story.append(Paragraph(case_info, self.styles['CustomHeading']))
 
@@ -123,16 +117,24 @@ class PDFGenerator:
         story.append(Paragraph(amount_text, self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
+        # Участники
         story.append(Paragraph("СОСТАВ АРБИТРАЖА:", self.styles['CustomHeading']))
         if participants:
-            participants_data = [[p.get('role', 'Неизвестно').title(),
+            role_map = {
+                'plaintiff': 'Истец',
+                'defendant': 'Ответчик',
+                'judge': 'Судья',
+                'witness': 'Свидетель'
+            }
+            participants_data = [[role_map.get(p.get('role', '').lower(), p.get('role', 'Неизвестно')),
                                   f"@{p.get('username', 'неизвестно')}"]
                                  for p in participants]
 
             participants_table = Table(participants_data, colWidths=[5 * cm, 7 * cm])
             participants_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTNAME', (0, 0), (-1, -1), self.font_name),
+                ('FONTSIZE', (0, 0), (-1, -1), 11),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black)
             ]))
             story.append(participants_table)
@@ -140,6 +142,7 @@ class PDFGenerator:
             story.append(Paragraph("Участники не указаны", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
+        # Факты
         story.append(Paragraph("УСТАНОВЛЕННЫЕ ФАКТЫ:", self.styles['CustomHeading']))
         for i, fact in enumerate(decision.get('established_facts', []), 1):
             story.append(Paragraph(f"{i}. {fact}", self.styles['CustomBullet']))
@@ -147,6 +150,7 @@ class PDFGenerator:
             story.append(Paragraph("Факты не установлены", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.3 * cm))
 
+        # Нарушения
         story.append(Paragraph("ВЫЯВЛЕННЫЕ НАРУШЕНИЯ:", self.styles['CustomHeading']))
         for i, violation in enumerate(decision.get('violations', []), 1):
             story.append(Paragraph(f"{i}. {violation}", self.styles['CustomBullet']))
@@ -154,16 +158,16 @@ class PDFGenerator:
             story.append(Paragraph("Нарушения не выявлены", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
+        # Решение
         story.append(Paragraph("РЕШЕНИЕ:", self.styles['CustomHeading']))
         story.append(Paragraph(decision.get('decision', 'Решение не вынесено'), self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # === ФИКС: используем amount_awarded ===
+        # Постановил
         story.append(Paragraph("ПОСТАНОВИЛ:", self.styles['CustomHeading']))
-
         verdict = decision.get('verdict', {})
         claim_amount = case_data.get('claim_amount', 0)
-        awarded = verdict.get('awarded') or 0  # если None → станет 0
+        awarded = verdict.get('awarded') or 0
 
         if verdict.get('claim_satisfied') and awarded > 0:
             if awarded < claim_amount:
@@ -178,14 +182,15 @@ class PDFGenerator:
                 ))
         else:
             story.append(Paragraph("1. В иске отказать.", self.styles['CustomBullet']))
-
         story.append(Spacer(1, 0.3 * cm))
 
+        # Обоснование
         if decision.get('reasoning'):
             story.append(Paragraph("ОБОСНОВАНИЕ:", self.styles['CustomHeading']))
             story.append(Paragraph(decision['reasoning'], self.styles['CustomNormal']))
 
-        story.append(Spacer(1, 1*cm))
+        # Подпись
+        story.append(Spacer(1, 1 * cm))
         story.append(Paragraph("ИИ-Судья", self.styles['CustomNormal']))
         story.append(Paragraph(f"Документ сгенерирован автоматически {current_date}", self.styles['CustomNormal']))
 
