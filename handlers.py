@@ -554,6 +554,7 @@ async def defendant_args(message: types.Message, state: FSMContext):
             )
         except Exception as e:
             print(f"Не удалось закрепить файл:{e}")
+        await db.save_decision(filepath)
         os.remove(filepath)
         await state.clear()
         return
@@ -578,7 +579,7 @@ async def defendant_args(message: types.Message, state: FSMContext):
         reply_markup=kb
     )
 
-@router.message(F.content_type.in_({"photo", "video", "document"}))
+@router.message(F.content_type.in_({"photo", "video", "document", "audio"}))
 async def media_handler(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state not in (DisputeState.plaintiff_arguments.state, DisputeState.defendant_arguments.state):
@@ -614,6 +615,9 @@ async def media_handler(message: types.Message, state: FSMContext):
     elif message.video:
         file_info = message.video.file_id
         content_type = "video"
+    elif message.audio:
+        file_info = message.audio.file_id
+        content_type = "audio"
 
     if file_info:
         await db.add_evidence(case_number, message.from_user.id, user_role, content_type,

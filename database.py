@@ -4,7 +4,6 @@ import asyncpg
 from conf import settings
 
 
-# === Database ===
 class Database:
     def __init__(self):
         self.pool = None
@@ -46,14 +45,14 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS decisions (
-                    id SERIAL PRIMARY KEY,
-                    case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,
-                    decision_text TEXT,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            ''')
+            # await conn.execute('''
+            #     CREATE TABLE IF NOT EXISTS decisions (
+            #         id SERIAL PRIMARY KEY,
+            #         case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,
+            #         decision_text TEXT,
+            #         created_at TIMESTAMP DEFAULT NOW()
+            #     )
+            # ''')
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS participants (
                     id SERIAL PRIMARY KEY,
@@ -202,7 +201,6 @@ class Database:
 
             case_id = case["id"]
 
-            # Вставляем участника по case_id
             await conn.execute("""
                 INSERT INTO participants (case_id, user_id, username, role)
                 VALUES ($1, $2, $3, $4)

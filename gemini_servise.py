@@ -3,20 +3,16 @@ from typing import List, Dict, Union
 import json
 import base64
 import io
-import os
-import tempfile
 from aiogram import Bot
 from aiogram.types import File
 from conf import settings
 import PyPDF2
 from docx import Document
-import zipfile
 
 
 class GeminiService:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        # ⚖️ Лучше брать vision-модель
         self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
     async def analyze_case(self, case_data: Dict, participants: List[Dict], evidence: List[Dict],
@@ -45,7 +41,7 @@ class GeminiService:
     async def generate_reasoning(self, case_data: Dict, participants: List[Dict], evidence: List[Dict],
                                  bot: Bot = None) -> str:
         """
-        Генерация только текста обоснования (чистый текст).
+        Генерация только текста обоснования.
         """
         messages = await self._build_multimodal_prompt(
             "Ты — ИИ судья. Сформулируй только обоснование решения (чистый текст).",
@@ -109,7 +105,6 @@ class GeminiService:
                 "reasoning": ""
             }
 
-    # ================= Работа с файлами Telegram =================
 
     async def _download_telegram_file(self, bot: Bot, file_id: str) -> bytes:
         """Загружает файл из Telegram по file_id"""
@@ -170,7 +165,6 @@ class GeminiService:
         image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
         return any(filename.lower().endswith(ext) for ext in image_extensions)
 
-    # ================= Построение промпта =================
 
     async def _build_multimodal_prompt(
             self, task_instruction: str, case_data: Dict, participants: List[Dict], evidence: List[Dict],
@@ -198,11 +192,9 @@ class GeminiService:
             role_text = "Истец" if ev.get("role") == "plaintiff" else "Ответчик"
 
             if ev["type"] == "text":
-                # Текстовые аргументы
                 messages.append(f"\n{i}. {role_text} - Аргумент:\n{ev.get('content', ev.get('description', ''))}\n")
 
             elif ev["type"] == "photo" and bot and ev.get("file_path"):
-                # Обработка изображений
                 try:
                     file_bytes = await self._download_telegram_file(bot, ev["file_path"])
                     if file_bytes:
@@ -218,27 +210,22 @@ class GeminiService:
                     messages.append(f"\n{i}. {role_text} - [Ошибка обработки изображения: {e}]\n")
 
             elif ev["type"] == "document" and bot and ev.get("file_path"):
-                # Обработка документов
                 try:
                     file_bytes = await self._download_telegram_file(bot, ev["file_path"])
                     if file_bytes:
-                        # Пытаемся получить имя файла из Telegram API
                         try:
                             file_info = await bot.get_file(ev["file_path"])
                             filename = file_info.file_path.split('/')[-1] if file_info.file_path else "document"
                         except:
                             filename = "document"
-
-                        # Если это изображение в виде документа, обрабатываем как изображение
                         if self._is_image(filename):
                             messages.append({
-                                "mime_type": "image/jpeg",  # Gemini поддерживает разные форматы
+                                "mime_type": "image/jpeg",
                                 "data": base64.b64encode(file_bytes).decode()
                             })
                             caption = ev.get('content', 'Изображение (документ)')
                             messages.append(f"\n{i}. {role_text} - Изображение-документ: {caption}\n")
                         else:
-                            # Извлекаем текст из документа
                             extracted_text = await self._extract_text_from_document(file_bytes, filename)
                             messages.append(f"\n{i}. {role_text} - Документ ({filename}):\n{extracted_text}\n")
                     else:
@@ -247,13 +234,11 @@ class GeminiService:
                     messages.append(f"\n{i}. {role_text} - [Ошибка обработки документа: {e}]\n")
 
             elif ev["type"] == "video" and ev.get("file_path"):
-                # Видео пока только описание
                 caption = ev.get('content', 'Видео-доказательство')
                 messages.append(
                     f"\n{i}. {role_text} - Видео: {caption}\n[Содержимое видео не анализируется автоматически]\n")
 
             else:
-                # Прочие типы доказательств
                 description = ev.get('content', ev.get('description', 'Доказательство без описания'))
                 messages.append(f"\n{i}. {role_text} - {ev['type']}: {description}\n")
 
@@ -270,14 +255,12 @@ class GeminiService:
     def _parse_analysis_response(self, response_text: str) -> Dict:
         """Парсит ответ от Gemini, извлекая JSON"""
         try:
-            # Ищем JSON в ответе
             start = response_text.find('{')
             end = response_text.rfind('}') + 1
             if start >= 0 and end > start:
                 json_str = response_text[start:end]
                 return json.loads(json_str)
             else:
-                # Если JSON не найден, возвращаем текст как decision
                 return {
                     "established_facts": [],
                     "violations": [],
