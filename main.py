@@ -11,6 +11,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from conf import settings
 from database import db
 from handlers import register_handlers
+from user_client import user_client
 
 # ----------------- Логирование -----------------
 logging.basicConfig(
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 storage = MemoryStorage()
 bot = Bot(
     token=settings.BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode="HTML")  # задаём parse_mode для всего бота
+    default=DefaultBotProperties(parse_mode="HTML")
 )
 dp = Dispatcher(storage=storage)
 
@@ -37,10 +38,21 @@ async def on_startup():
     logger.info("🚀 Запуск ИИ-Судьи...")
     try:
         await db.connect()
+        await db.create_additional_tables()  # Создаем дополнительные таблицы
         logger.info("✅ Подключение к базе данных успешно")
     except Exception as e:
         logger.error(f"❌ Ошибка подключения к базе данных: {e}")
         raise e
+
+    # Инициализация пользовательского клиента
+    try:
+        client_initialized = await user_client.initialize()
+        if client_initialized:
+            logger.info("✅ Пользовательский клиент инициализирован")
+        else:
+            logger.warning("⚠️ Пользовательский клиент требует авторизации")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации пользовательского клиента: {e}")
 
     os.makedirs("documents", exist_ok=True)
     logger.info("📁 Папка для документов создана")
@@ -53,6 +65,10 @@ async def on_startup():
 
 async def on_shutdown():
     logger.info("🛑 Остановка ИИ-Судьи...")
+
+    # Отключение пользовательского клиента
+    await user_client.disconnect()
+
     if db.pool:
         await db.pool.close()
         logger.info("✅ Соединение с базой данных закрыто")
@@ -67,6 +83,9 @@ async def main():
         return
     if not settings.DATABASE_URL:
         logger.error("❌ Не указан DATABASE_URL")
+        return
+    if not settings.API_ID or not settings.API_HASH:
+        logger.error("❌ Не указаны API_ID или API_HASH для Telegram API")
         return
 
     try:

@@ -1,6 +1,9 @@
 import uuid
 from typing import Optional, List, Dict
 import asyncpg
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+
 from conf import settings
 
 
@@ -45,14 +48,6 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
-            # await conn.execute('''
-            #     CREATE TABLE IF NOT EXISTS decisions (
-            #         id SERIAL PRIMARY KEY,
-            #         case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,
-            #         decision_text TEXT,
-            #         created_at TIMESTAMP DEFAULT NOW()
-            #     )
-            # ''')
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS participants (
                     id SERIAL PRIMARY KEY,
@@ -62,6 +57,30 @@ class Database:
                     role TEXT CHECK (role IN ('plaintiff', 'defendant', 'witness')),
                     joined_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(case_id, user_id, role)
+                )
+            ''')
+
+    async def create_additional_tables(self):
+        """Создание дополнительных таблиц для пользовательских сессий и групп"""
+        async with self.pool.acquire() as conn:
+            # Таблица для сессий
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    id SERIAL PRIMARY KEY,
+                    session_string TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            ''')
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS dispute_groups (
+                    id SERIAL PRIMARY KEY,
+                    case_number VARCHAR(50) UNIQUE,
+                    chat_id BIGINT NOT NULL,
+                    title VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
 
@@ -213,6 +232,45 @@ class Database:
                    FROM participants
                    WHERE case_id = $1
                """, case_id)
-            return [dict(r) for r in rows]
+        return [dict(r) for r in rows]
+
+    # ===== ГРУППЫ ДЕЛ =====
+    async def save_dispute_group(self, case_number: str, chat_id: int, title: str):
+        """Сохранение информации о группе дела"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO dispute_groups (case_number, chat_id, title, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (case_number) DO UPDATE SET
+                chat_id = $2, title = $3, updated_at = NOW()
+            ''', case_number, chat_id, title)
+
+    async def get_dispute_group(self, case_number: str) -> Optional[Dict]:
+        """Получение информации о группе дела"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT * FROM dispute_groups WHERE case_number = $1
+            ''', case_number)
+            return dict(row) if row else None
+
+    # ===== ПОЛЬЗОВАТЕЛЬСКИЕ СЕССИИ =====
+    async def save_user_session(self, session_string: str):
+        """Сохранение пользовательской сессии"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                DELETE FROM user_sessions;
+                INSERT INTO user_sessions (session_string, created_at) 
+                VALUES ($1, NOW())
+            ''', session_string)
+
+    async def get_user_session(self) -> Optional[Dict]:
+        """Получение пользовательской сессии"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT session_string, created_at FROM user_sessions 
+                ORDER BY created_at DESC LIMIT 1
+            ''')
+            return dict(row) if row else None
+
 
 db = Database()

@@ -1,5 +1,8 @@
+import asyncio
 import os
+
 from aiogram import Router, types, F, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -7,10 +10,15 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated, CallbackQuery
 )
-from aiogram.exceptions import TelegramBadRequest
+from telethon.tl.functions.channels import EditAdminRequest, EditCreatorRequest, LeaveChannelRequest, \
+    InviteToChannelRequest
+from telethon.tl.functions.messages import ExportChatInviteRequest
+from telethon.tl.types import ChatAdminRights
+
+from database import db
 from gemini_servise import gemini_service
 from pdf_gen import PDFGenerator
-from database import db
+from user_client import user_client
 
 router = Router()
 pdf_generator = PDFGenerator()
@@ -23,6 +31,12 @@ class DisputeState(StatesGroup):
     plaintiff_arguments = State()
     defendant_arguments = State()
     finished = State()
+    waiting_groupe = State()
+
+
+class GroupState(StatesGroup):
+    waiting_group_name = State()
+    waiting_case_number = State()
 
 
 CATEGORIES = [
@@ -36,7 +50,6 @@ CATEGORIES = [
 ]
 
 
-# === Генерация одноразовой invite-ссылки ===
 async def generate_invite_kb(bot, chat_id: int, case_number: str):
     try:
         print(f"🔗 Создаю invite-ссылку для дела {case_number} в чате {chat_id}")
@@ -113,12 +126,26 @@ async def on_user_join(event: ChatMemberUpdated, state: FSMContext):
             defendant_username=event.new_chat_member.user.username or event.new_chat_member.user.full_name
         )
         await state.update_data(case_number=case_number)
-        await state.set_state(DisputeState.defendant_arguments)
+        await state.set_statef(DisputeState.defendant_arguments)
         print(f"✅ Ответчик {defendant_id} добавлен в дело {case_number}")
 
 
 @router.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext):
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🏗 Создать группу")],
+        [KeyboardButton(text="ℹ️ Справка")]
+    ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer(
+        "Здравстуйте, Я ИИ-бот Судья для решения ваших споров и конфликтов. Для начала работы ознакомьтесь с инструкцией: 'ℹ️ Справка' ",
+        reply_markup=kb)
+
+
+@router.callback_query(F.data == "start_chat")
+async def start_chat_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -130,13 +157,123 @@ async def start_command(message: types.Message, state: FSMContext):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    await message.answer(
-        "Здравствуйте! ⚖️ Я — ИИ судья.\n"
-        "Я помогу объективно рассмотреть спор.\n\n"
-        "💡 *Важно:* Для корректной работы добавьте меня администратором в группу, где будет проходить дело.",
+
+    await callback.bot.send_message(
+        chat_id=callback.message.chat.id,   # <--- вот этого у тебя не хватало
+        text=(
+            "Здравствуйте! ⚖️ Я — ИИ судья.\n"
+            "Я помогу объективно рассмотреть спор.\n\n"
+            "💡 *Важно:* Для корректной работы добавьте меня администратором в группу, "
+            "где будет проходить дело."
+        ),
         reply_markup=kb,
         parse_mode="Markdown"
     )
+    await callback.answer()
+
+
+@router.message(GroupState.waiting_group_name)
+async def input_group_name(message: types.Message, state: FSMContext):
+    topic = message.text.strip()
+    if not topic:
+        await message.answer("❌ Название не может быть пустым.")
+        return
+
+    case_number = await db.create_case(
+        topic=topic,
+        chat_id=message.chat.id,
+        category=None,
+        claim_amount=None,
+        mode="упрощенный",
+        plaintiff_id=message.from_user.id,
+        plaintiff_username=message.from_user.username or message.from_user.full_name,
+        status="active"
+    )
+
+    result = await user_client.create_dispute_group(
+        case_number=case_number,
+        case_topic=topic,
+        creator_id=message.from_user.id
+    )
+
+    if not result:
+        await message.answer("❌ Произошла ошибка при создании группы.")
+        await state.clear()
+        return
+
+    chat_id = result['chat_id']
+    bot_id = (await message.bot.get_me()).id
+
+    rights = ChatAdminRights(
+        change_info=True,
+        post_messages=True,
+        edit_messages=True,
+        delete_messages=True,
+        ban_users=True,
+        invite_users=True,
+        pin_messages=True,
+        add_admins=True,
+        anonymous=False,
+        manage_call=True,
+        other=True
+    )
+
+    try:
+        # Make bot admin first
+        await user_client.client(EditAdminRequest(
+            channel=chat_id,
+            user_id=bot_id,
+            admin_rights=rights,
+            rank="Судья"
+        ))
+
+        await asyncio.sleep(1)
+        await user_client.client(InviteToChannelRequest(
+            channel=chat_id,
+            users=[message.from_user.id]
+        ))
+        invite = await user_client.client(ExportChatInviteRequest(
+            peer=chat_id,
+            legacy_revoke_permanent=True,
+            request_needed=False,
+            usage_limit=1
+        ))
+        invite_link = invite.link
+
+        await message.answer(
+            f"✅ Группа успешно создана!\n"
+            f"Название: {result['title']}\n"
+            f"Истец нажмите на кнопку чтобы войти в группу.\n"
+            f"Ссылка на группу: {invite_link}"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при настройке группы: {e}")
+        await state.clear()
+        return
+
+    await state.clear()
+
+
+@router.my_chat_member()
+async def bot_added(event: ChatMemberUpdated):
+    if (event.old_chat_member is None or event.old_chat_member.status in ("kicked", "left")) \
+            and event.new_chat_member.status in ("member", "administrator"):
+        return
+
+    if event.new_chat_member.user.id == (await event.bot.get_me()).id:
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="⚖ Начать", callback_data="start_chat")]
+            ]
+        )
+        try:
+            await event.bot.send_message(
+                chat_id=event.chat.id,
+                text="Привет! Я готов вести это дело. Нажмите кнопку ниже для начала:",
+                reply_markup=kb
+            )
+        except Exception as e:
+            print(f"Не удалось отправить сообщение в группу: {e}")
 
 
 @router.message(F.text == "ℹ️ Справка")
@@ -144,9 +281,8 @@ async def help_command(message: types.Message):
     await message.answer(
         "📖 *Справка по использованию ИИ судьи:*\n\n"
         "*Подготовка:*\n"
-        "🔸 Создайте группу в Telegram\n"
-        "🔸 Добавьте бота в группу как администратора\n"
-        "🔸 Дайте боту права на управление группой\n\n"
+        "🔸 Создайте группу в Telegram «🏗 Создать группу » \n"
+        "🔸 Перейдите в группу вашего дела \n"
         "*Процесс разбирательства:*\n"
         "1️⃣ Нажмите «⚖️ Начать Дело»\n"
         "2️⃣ Введите тему спора\n"
@@ -161,6 +297,16 @@ async def help_command(message: types.Message):
         "📂 Просматривайте историю в «Мои дела»",
         parse_mode="Markdown"
     )
+
+
+@router.message(F.text == "🏗 Создать группу")
+async def create_group(message: types.Message, state: FSMContext):
+    if not user_client.is_connected:
+        await message.answer("❌ Сначала необходимо авторизоваться!")
+        return
+
+    await state.set_state(GroupState.waiting_group_name)
+    await message.answer("Введите тему спора / название группы:", reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(F.text == "📂 Мои дела")
@@ -411,7 +557,6 @@ async def input_claim_amount(message: types.Message, state: FSMContext):
                 parse_mode="Markdown"
             )
 
-    # Переходим к стадии аргументов истца
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Завершить аргументы")]],
         resize_keyboard=True
@@ -437,7 +582,6 @@ async def plaintiff_args(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Проверяем роль пользователя
     user_role = await check_user_role_in_case(case_number, message.from_user.id)
     if user_role != "plaintiff":
         await message.answer("⚠️ Только истец может добавлять аргументы на этой стадии.")
@@ -447,7 +591,6 @@ async def plaintiff_args(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение с аргументами.")
         return
 
-    # Проверяем команду завершения
     if message.text.lower().startswith("завершить"):
         await db.update_case_stage(case_number, "defendant")
         await state.set_state(DisputeState.defendant_arguments)
@@ -466,7 +609,6 @@ async def plaintiff_args(message: types.Message, state: FSMContext):
         )
         return
 
-    # Сохраняем аргумент истца
     await db.add_evidence(case_number, message.from_user.id, "plaintiff", "text", message.text, None)
 
     kb = ReplyKeyboardMarkup(
@@ -501,7 +643,6 @@ async def defendant_args(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение с аргументами.")
         return
 
-    # Проверяем завершение
     if message.text.lower().startswith("завершить"):
         await db.update_case_status(case_number, status="finished")
         await state.set_state(DisputeState.finished)
@@ -579,6 +720,7 @@ async def defendant_args(message: types.Message, state: FSMContext):
         reply_markup=kb
     )
 
+
 @router.message(F.content_type.in_({"photo", "video", "document", "audio"}))
 async def media_handler(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -597,7 +739,6 @@ async def media_handler(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Вы не являетесь участником этого дела.")
         return
 
-    # Проверяем, соответствует ли роль пользователя текущей стадии
     if (current_state == DisputeState.plaintiff_arguments.state and user_role != "plaintiff") or \
             (current_state == DisputeState.defendant_arguments.state and user_role != "defendant"):
         stage_name = "истца" if current_state == DisputeState.plaintiff_arguments.state else "ответчика"
@@ -647,19 +788,19 @@ async def unknown_message_handler(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
 
     # Если пользователь находится в процессе дела, но отправляет неподходящее сообщение
-    if current_state in (DisputeState.plaintiff_arguments.state, DisputeState.defendant_arguments.state):
-        data = await state.get_data()
-        case_number = data.get("case_number")
-        if case_number:
-            user_role = await check_user_role_in_case(case_number, message.from_user.id)
-            if user_role:
-                # Если пользователь участник дела, но сейчас не его очередь
-                if (current_state == DisputeState.plaintiff_arguments.state and user_role != "plaintiff"):
-                    await message.answer("⚠️ Сейчас стадия аргументов истца. Ожидайте своей очереди.")
-                    return
-                elif (current_state == DisputeState.defendant_arguments.state and user_role != "defendant"):
-                    await message.answer("⚠️ Сейчас стадия аргументов ответчика. Ожидайте завершения.")
-                    return
+    # if current_state in (DisputeState.plaintiff_arguments.state, DisputeState.defendant_arguments.state):
+    #     data = await state.get_data()
+    #     case_number = data.get("case_number")
+    #     if case_number:
+    #         user_role = await check_user_role_in_case(case_number, message.from_user.id)
+    #         if user_role:
+    #             # Если пользователь участник дела, но сейчас не его очередь
+    #             if (current_state == DisputeState.plaintiff_arguments.state and user_role != "plaintiff"):
+    #                 await message.answer("⚠️ Сейчас стадия аргументов истца. Ожидайте своей очереди.")
+    #                 return
+    #             elif (current_state == DisputeState.defendant_arguments.state and user_role != "defendant"):
+    #                 await message.answer("⚠️ Сейчас стадия аргументов ответчика. Ожидайте завершения.")
+    #                 return
 
     if current_state is None:
         if message.chat.type == "private":
