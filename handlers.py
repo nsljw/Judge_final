@@ -1,5 +1,7 @@
 import asyncio
+import datetime
 import os
+from datetime import datetime, timedelta
 
 from aiogram import Router, types, F, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
@@ -10,7 +12,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated, CallbackQuery
 )
-from telethon.tl.functions.channels import EditAdminRequest, EditCreatorRequest, LeaveChannelRequest, \
+from telethon.tl.functions.channels import EditAdminRequest, LeaveChannelRequest, \
     InviteToChannelRequest
 from telethon.tl.functions.messages import ExportChatInviteRequest
 from telethon.tl.types import ChatAdminRights
@@ -159,7 +161,7 @@ async def start_chat_callback(callback: types.CallbackQuery, state: FSMContext):
     )
 
     await callback.bot.send_message(
-        chat_id=callback.message.chat.id,   # <--- вот этого у тебя не хватало
+        chat_id=callback.message.chat.id,
         text=(
             "Здравствуйте! ⚖️ Я — ИИ судья.\n"
             "Я помогу объективно рассмотреть спор.\n\n"
@@ -179,20 +181,22 @@ async def input_group_name(message: types.Message, state: FSMContext):
         await message.answer("❌ Название не может быть пустым.")
         return
 
-    case_number = await db.create_case(
-        topic=topic,
-        chat_id=message.chat.id,
-        category=None,
-        claim_amount=None,
-        mode="упрощенный",
-        plaintiff_id=message.from_user.id,
-        plaintiff_username=message.from_user.username or message.from_user.full_name,
-        status="active"
-    )
+    group_title = f"Дело на тему: {topic}"
+
+    # case_number = await db.create_case(
+    #     topic=topic,
+    #     chat_id=message.chat.id,
+    #     category=None,
+    #     claim_amount=None,
+    #     mode="упрощенный",
+    #     plaintiff_id=message.from_user.id,
+    #     plaintiff_username=message.from_user.username or message.from_user.full_name,
+    #     status="active"
+    # )
 
     result = await user_client.create_dispute_group(
-        case_number=case_number,
-        case_topic=topic,
+        case_number=None,
+        case_topic=group_title,
         creator_id=message.from_user.id
     )
 
@@ -219,7 +223,6 @@ async def input_group_name(message: types.Message, state: FSMContext):
     )
 
     try:
-        # Make bot admin first
         await user_client.client(EditAdminRequest(
             channel=chat_id,
             user_id=bot_id,
@@ -228,15 +231,13 @@ async def input_group_name(message: types.Message, state: FSMContext):
         ))
 
         await asyncio.sleep(1)
+        expire_time = int((datetime.utcnow() + timedelta(hours=1)).timestamp())
         await user_client.client(InviteToChannelRequest(
             channel=chat_id,
             users=[message.from_user.id]
         ))
         invite = await user_client.client(ExportChatInviteRequest(
             peer=chat_id,
-            legacy_revoke_permanent=True,
-            request_needed=False,
-            usage_limit=1
         ))
         invite_link = invite.link
 
@@ -250,8 +251,20 @@ async def input_group_name(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при настройке группы: {e}")
         await state.clear()
         return
+    try:
+        await user_client.client(LeaveChannelRequest(
+            channel=chat_id
+        ))
+        print(f"user-client успешно удален из группы {chat_id}")
+    except Exception as e:
+        await message.answer("User-client не удалось выйти из группы чата")
 
     await state.clear()
+
+
+@router.message(F.left_chat_member)
+async def delete_left_event(message: types.Message):
+    await message.delete()
 
 
 @router.my_chat_member()
@@ -419,14 +432,14 @@ async def start_dispute(message: types.Message, state: FSMContext):
         return
 
     # Проверяем, есть ли уже активное дело в этой группе
-    # existing_case = await db.get_case_by_chat(message.chat.id)
-    # if existing_case and existing_case["status"] == "active":
-    #     await message.answer(
-    #         f"⚠️ В этой группе уже есть активное дело №{existing_case['case_number']}\n"
-    #         f"Тема: {existing_case['topic']}\n\n"
-    #         f"Завершите текущее дело перед созданием нового."
-    #     )
-    #     return
+    existing_case = await db.get_case_by_chat(message.chat.id)
+    if existing_case and existing_case["status"] == "active":
+        await message.answer(
+            f"⚠️ В этой группе уже есть активное дело №{existing_case['case_number']}\n"
+            f"Тема: {existing_case['topic']}\n\n"
+            f"Завершите текущее дело перед созданием нового."
+        )
+        return
 
     await state.set_state(DisputeState.waiting_topic)
     await message.answer(
@@ -634,10 +647,10 @@ async def defendant_args(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    user_role = await check_user_role_in_case(case_number, message.from_user.id)
-    if user_role != "defendant":
-        await message.answer("⚠️ Только ответчик может добавлять аргументы на этой стадии.")
-        return
+    # user_role = await check_user_role_in_case(case_number, message.from_user.id)
+    # if user_role != "defendant":
+    #     await message.answer("⚠️ Только ответчик может добавлять аргументы на этой стадии.")
+    #     return
 
     if not message.text:
         await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение с аргументами.")
@@ -672,9 +685,8 @@ async def defendant_args(message: types.Message, state: FSMContext):
         pdf_bytes = pdf_generator.generate_verdict_pdf(case, decision, participants_info, evidence_info)
 
         filepath = f"verdict_{case_number}.pdf"
-        with open(filepath, "wb") as f:
-            f.write(pdf_bytes)
-
+        # with open(filepath, "wb") as f:
+        #     f.write(pdf_bytes)
         verdict_kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="⚖ Начать Дело")],
@@ -686,6 +698,9 @@ async def defendant_args(message: types.Message, state: FSMContext):
         )
         await message.answer("⚖️ Суд завершён. Итоговый вердикт:", reply_markup=verdict_kb)
 
+        await db.save_decision(case_number=case_number,
+                               file_path=filepath)
+
         sent = await message.answer_document(FSInputFile(filepath))
         try:
             await message.bot.pin_chat_message(
@@ -695,7 +710,6 @@ async def defendant_args(message: types.Message, state: FSMContext):
             )
         except Exception as e:
             print(f"Не удалось закрепить файл:{e}")
-        await db.save_decision(filepath)
         os.remove(filepath)
         await state.clear()
         return

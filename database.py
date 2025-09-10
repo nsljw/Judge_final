@@ -59,6 +59,15 @@ class Database:
                     UNIQUE(case_id, user_id, role)
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id SERIAL PRIMARY KEY,
+                    case_number VARCHAR(50) UNIQUE,
+                    file_path TEXT,
+                    file_data BYTEA,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            ''')
 
     async def create_additional_tables(self):
         """Создание дополнительных таблиц для пользовательских сессий и групп"""
@@ -199,15 +208,27 @@ class Database:
             rows = await conn.fetch('SELECT * FROM evidence WHERE case_id = $1 ORDER BY created_at', case_id)
             return [dict(r) for r in rows]
 
-    async def save_decision(self, case_number: str, decision_text: str):
+    async def save_decision(self, case_number: str, file_path: str = None, file_data: bytes = None):
         async with self.pool.acquire() as conn:
-            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number = $1', case_number)
-            if not case_id:
-                raise ValueError(f"Дело {case_number} не найдено")
-            await conn.execute('''
-                INSERT INTO decisions (case_id, decision_text)
-                VALUES ($1, $2)
-            ''', case_id, decision_text)
+            await conn.execute("""
+                INSERT INTO decisions (case_number, file_path, file_data, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (case_number)
+                DO UPDATE SET file_path = EXCLUDED.file_path,
+                              file_data = EXCLUDED.file_data,
+                              created_at = NOW()
+            """, case_number, file_path, file_data)
+
+    async def get_decision_file(self, case_number: str):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT file_data FROM decisions WHERE case_number = $1",
+                case_number
+            )
+            if row and row["file_data"]:
+                return row["file_data"]
+            return None
+
 
     async def add_participant(self, case_number: str, user_id: int, username: str, role: str):
         async with self.pool.acquire() as conn:

@@ -41,7 +41,6 @@ class UserClient:
 
             await self.client.connect()
 
-            # Отправка кода
             sent_code = await self.client.send_code_request(phone)
 
             return {
@@ -59,7 +58,6 @@ class UserClient:
         try:
             await self.client.sign_in(phone, code, phone_code_hash=phone_code_hash)
 
-            # Сохранение сессии
             self.session_string = self.client.session.save()
             await db.save_user_session(self.session_string)
 
@@ -79,19 +77,24 @@ class UserClient:
             return None
 
         try:
-            group_title = f"⚖️ Дело {case_number}"
+            if case_number:
+                group_title = f"⚖️ Дело {case_number}"
+                about_text = f"Группа для рассмотрения дела №{case_number}. Тема: {case_topic}"
+            else:
+                group_title = f"⚖  {case_topic}"
+                about_text = f"Группа для рассмотрения спора. {case_topic}"
 
-            # Создание супергруппы (аналог обычного группового чата)
+
+
             result = await self.client(CreateChannelRequest(
                 title=group_title,
-                about=f"Группа для рассмотрения дела №{case_number}. Тема: {case_topic}",
+                about=f"Группа для рассмотрения дела на тему: {case_topic}",
                 megagroup=True
             ))
 
             chat = result.chats[0]
             chat_id = chat.id
 
-            # Добавление создателя (если это не он сам)
             try:
                 creator = await self.client.get_entity(creator_id)
                 await self.client(InviteToChannelRequest(
@@ -101,7 +104,6 @@ class UserClient:
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось добавить создателя {creator_id} в группу: {e}")
 
-            # Добавление бота в группу
             bot_username = settings.BOT_USERNAME.replace('@', '')
             try:
                 bot_entity = await self.client.get_entity(bot_username)
@@ -113,8 +115,8 @@ class UserClient:
             except Exception as e:
                 logger.error(f"❌ Не удалось добавить бота в группу: {e}")
 
-            # Сохраняем информацию о группе в БД
-            await db.save_dispute_group(case_number, chat_id, group_title)
+            if case_number:
+                await db.save_dispute_group(case_number, chat_id, group_title)
 
             logger.info(f"✅ Супергруппа создана: {group_title} (ID: {chat_id})")
 
@@ -169,5 +171,4 @@ class UserClient:
             logger.info("🔌 Пользовательский клиент отключен")
 
 
-# Глобальный экземпляр клиента
 user_client = UserClient()

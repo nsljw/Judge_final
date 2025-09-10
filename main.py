@@ -1,4 +1,3 @@
-# main.py
 import asyncio
 import logging
 import sys
@@ -13,7 +12,6 @@ from database import db
 from handlers import register_handlers
 from user_client import user_client
 
-# ----------------- Логирование -----------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -24,7 +22,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ----------------- FSM и бот -----------------
 storage = MemoryStorage()
 bot = Bot(
     token=settings.BOT_TOKEN,
@@ -33,18 +30,16 @@ bot = Bot(
 dp = Dispatcher(storage=storage)
 
 
-# ----------------- СТАРТ/СТОП -----------------
 async def on_startup():
     logger.info("🚀 Запуск ИИ-Судьи...")
     try:
         await db.connect()
-        await db.create_additional_tables()  # Создаем дополнительные таблицы
+        await db.create_additional_tables()
         logger.info("✅ Подключение к базе данных успешно")
     except Exception as e:
         logger.error(f"❌ Ошибка подключения к базе данных: {e}")
         raise e
 
-    # Инициализация пользовательского клиента
     try:
         client_initialized = await user_client.initialize()
         if client_initialized:
@@ -57,7 +52,6 @@ async def on_startup():
     os.makedirs("documents", exist_ok=True)
     logger.info("📁 Папка для документов создана")
 
-    # Регистрируем хендлеры
     register_handlers(dp)
     logger.info("✅ Хендлеры зарегистрированы")
     logger.info("✅ Инициализация завершена")
@@ -66,7 +60,6 @@ async def on_startup():
 async def on_shutdown():
     logger.info("🛑 Остановка ИИ-Судьи...")
 
-    # Отключение пользовательского клиента
     await user_client.disconnect()
 
     if db.pool:
@@ -76,7 +69,6 @@ async def on_shutdown():
     logger.info("✅ Бот остановлен")
 
 
-# ----------------- ОСНОВНАЯ ФУНКЦИЯ -----------------
 async def main():
     if not settings.BOT_TOKEN:
         logger.error("❌ Не указан BOT_TOKEN")
@@ -92,7 +84,6 @@ async def main():
         await on_startup()
         logger.info("🔄 Начинается поллинг бота...")
 
-        # Запуск поллинга
         await dp.start_polling(bot, skip_updates=True)
 
     except KeyboardInterrupt:
@@ -104,7 +95,6 @@ async def main():
         await on_shutdown()
 
 
-# ----------------- ЗАПУСК -----------------
 if __name__ == "__main__":
     if sys.version_info < (3, 8):
         logger.error("❌ Требуется Python 3.8 или новее")
