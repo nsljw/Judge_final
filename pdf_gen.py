@@ -201,7 +201,7 @@ class PDFGenerator:
     def save_pdf_to_file(self, pdf_data: bytes, filename: str) -> str:
         docs_dir = "documents"
         os.makedirs(docs_dir, exist_ok=True)
-        filepath = os.path.join(docs_dir, filename)
+        filepath = os.path.join(docs_dir, filename,)
         with open(filepath, 'wb') as f:
             f.write(pdf_data)
         return filepath

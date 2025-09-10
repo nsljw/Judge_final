@@ -685,8 +685,8 @@ async def defendant_args(message: types.Message, state: FSMContext):
         pdf_bytes = pdf_generator.generate_verdict_pdf(case, decision, participants_info, evidence_info)
 
         filepath = f"verdict_{case_number}.pdf"
-        # with open(filepath, "wb") as f:
-        #     f.write(pdf_bytes)
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
         verdict_kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="⚖ Начать Дело")],
