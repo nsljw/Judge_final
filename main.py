@@ -53,7 +53,6 @@ async def on_startup():
         logger.info("📁 Папка для документов создана")
     except Exception as e:
         logger.error(f"❌ Ошибка при создании папки documents: {e}")
-
     try:
         register_handlers(dp)
         logger.info("✅ Хендлеры зарегистрированы")
@@ -107,7 +106,6 @@ async def main():
         logger.error("❌ Не указаны API_ID или API_HASH для Telegram API")
         return
 
-    # Цикл перезапуска — бот всегда будет подниматься заново
     while True:
         try:
             await run_bot()

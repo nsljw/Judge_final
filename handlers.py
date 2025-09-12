@@ -25,6 +25,7 @@ from user_client import user_client
 
 router = Router()
 pdf_generator = PDFGenerator()
+CASES_PER_PAGE = 10
 
 
 class DisputeState(StatesGroup):
@@ -147,8 +148,8 @@ async def start_command(message: types.Message, state: FSMContext):
         reply_markup=kb)
 
 
-@router.callback_query(F.data == "start_chat")
-async def start_chat_callback(callback: types.CallbackQuery, state: FSMContext):
+@router.message(F.text == "⚖ Начать")
+async def start_chat_message(message: types.Message, state: FSMContext):
     await state.clear()
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -161,8 +162,8 @@ async def start_chat_callback(callback: types.CallbackQuery, state: FSMContext):
         one_time_keyboard=True
     )
 
-    await callback.bot.send_message(
-        chat_id=callback.message.chat.id,
+    await message.bot.send_message(
+        chat_id=message.chat.id,
         text=(
             "Здравствуйте! ⚖️ Я — ИИ судья.\n"
             "Я помогу объективно рассмотреть спор.\n\n"
@@ -172,7 +173,23 @@ async def start_chat_callback(callback: types.CallbackQuery, state: FSMContext):
         reply_markup=kb,
         parse_mode="Markdown"
     )
-    await callback.answer()
+    # await message.answer()
+
+
+@router.message(F.text == "⬅️ Назад в меню")
+async def back_to_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⚖ Начать Дело")],
+            [KeyboardButton(text="📂 Мои дела")],
+            [KeyboardButton(text="📝Черновик")],
+            [KeyboardButton(text="ℹ️ Справка")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("Вы вернулись в меню, ваше дело переходит в черновик")
 
 
 @router.message(GroupState.waiting_group_name)
@@ -232,7 +249,6 @@ async def input_group_name(message: types.Message, state: FSMContext):
         ))
 
         await asyncio.sleep(1)
-        expire_time = int((datetime.utcnow() + timedelta(hours=1)).timestamp())
         await user_client.client(InviteToChannelRequest(
             channel=chat_id,
             users=[message.from_user.id]
@@ -275,9 +291,9 @@ async def bot_added(event: ChatMemberUpdated):
         return
 
     if event.new_chat_member.user.id == (await event.bot.get_me()).id:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="⚖ Начать", callback_data="start_chat")]
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="⚖ Начать")]
             ]
         )
         try:
@@ -322,15 +338,12 @@ async def create_group(message: types.Message, state: FSMContext):
     await state.set_state(GroupState.waiting_group_name)
     await message.answer("Введите тему спора / название группы:", reply_markup=ReplyKeyboardRemove())
 
-CASES_PER_PAGE = 10
-
 
 async def build_cases_text(user_cases, user_id, page: int):
     start = page * CASES_PER_PAGE
     end = start + CASES_PER_PAGE
-    # берём последние дела
     total = len(user_cases)
-    user_cases = list(reversed(user_cases))  # чтобы последние были первыми
+    user_cases = list(reversed(user_cases))
     page_cases = user_cases[start:end]
 
     text = "📂 *Ваши дела:*\n\n"
@@ -348,6 +361,7 @@ async def build_cases_text(user_cases, user_id, page: int):
     text += f"📊 Всего дел: {total}\n"
     return text, total
 
+
 def build_pagination_keyboard(page: int, total: int):
     builder = InlineKeyboardBuilder()
     max_page = (total - 1) // CASES_PER_PAGE
@@ -358,6 +372,7 @@ def build_pagination_keyboard(page: int, total: int):
         buttons.append(types.InlineKeyboardButton(text="➡️", callback_data=f"cases_page:{page+1}"))
     builder.row(*buttons)
     return builder.as_markup()
+
 
 @router.message(F.text == "📂 Мои дела")
 async def my_cases(message: types.Message, state: FSMContext):
@@ -372,6 +387,7 @@ async def my_cases(message: types.Message, state: FSMContext):
     keyboard = build_pagination_keyboard(page, total)
     await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
 
+
 @router.callback_query(F.data.startswith("cases_page:"))
 async def paginate_cases(callback: types.CallbackQuery):
     page = int(callback.data.split(":")[1])
@@ -383,7 +399,6 @@ async def paginate_cases(callback: types.CallbackQuery):
 
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
     await callback.answer()
-
 
 
 @router.message(F.text == "📝Черновик")
@@ -461,14 +476,29 @@ async def resume_case(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text == "⚖ Начать Дело")
 async def start_dispute(message: types.Message, state: FSMContext):
+    if message.text == "⬅️ Назад в меню":
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="⚖ Начать Дело")],
+                [KeyboardButton(text="📂 Мои дела")],
+                [KeyboardButton(text="📝Черновик")],
+                [KeyboardButton(text="ℹ️ Справка")]
+            ], resize_keyboard=True, one_time_keyboard=True)
+        await state.clear()
+        await message.answer("🔙 Возвращаемся в меню", reply_markup=kb)
+        return
+
     if message.chat.type not in ("group", "supergroup"):
+        kb = ReplyKeyboardMarkup(keyboard=[
+            [KeyboardButton(text="⬅️ Назад в меню")]
+        ], resize_keyboard=True, one_time_keyboard=True)
         await message.answer(
             "⚠️ *Внимание!* Дело нужно создавать в группе.\n\n"
             "📋 *Инструкция:*\n"
             "1. Создайте группу в Telegram\n"
             "2. Добавьте меня в группу как администратора\n"
             "3. В группе напишите /start и выберите «⚖ Начать Дело»",
-            parse_mode="Markdown"
+            parse_mode="Markdown", reply_markup=kb
         )
         return
 
