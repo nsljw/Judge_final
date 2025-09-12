@@ -38,7 +38,6 @@ async def on_startup():
         logger.info("✅ Подключение к базе данных успешно")
     except Exception as e:
         logger.error(f"❌ Ошибка подключения к базе данных: {e}")
-        raise e
 
     try:
         client_initialized = await user_client.initialize()
@@ -49,24 +48,52 @@ async def on_startup():
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации пользовательского клиента: {e}")
 
-    os.makedirs("documents", exist_ok=True)
-    logger.info("📁 Папка для документов создана")
+    try:
+        os.makedirs("documents", exist_ok=True)
+        logger.info("📁 Папка для документов создана")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании папки documents: {e}")
 
-    register_handlers(dp)
-    logger.info("✅ Хендлеры зарегистрированы")
+    try:
+        register_handlers(dp)
+        logger.info("✅ Хендлеры зарегистрированы")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при регистрации хендлеров: {e}")
+
     logger.info("✅ Инициализация завершена")
 
 
 async def on_shutdown():
     logger.info("🛑 Остановка ИИ-Судьи...")
 
-    await user_client.disconnect()
+    try:
+        await user_client.disconnect()
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отключении user_client: {e}")
 
     if db.pool:
-        await db.pool.close()
-        logger.info("✅ Соединение с базой данных закрыто")
-    await bot.session.close()
-    logger.info("✅ Бот остановлен")
+        try:
+            await db.pool.close()
+            logger.info("✅ Соединение с базой данных закрыто")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при закрытии БД: {e}")
+
+    try:
+        await bot.session.close()
+        logger.info("✅ Бот остановлен")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при закрытии сессии бота: {e}")
+
+
+async def run_bot():
+    try:
+        await on_startup()
+        logger.info("🔄 Начинается поллинг бота...")
+        await dp.start_polling(bot, skip_updates=True)
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка во время работы бота: {e}", exc_info=True)
+    finally:
+        await on_shutdown()
 
 
 async def main():
@@ -80,19 +107,16 @@ async def main():
         logger.error("❌ Не указаны API_ID или API_HASH для Telegram API")
         return
 
-    try:
-        await on_startup()
-        logger.info("🔄 Начинается поллинг бота...")
-
-        await dp.start_polling(bot, skip_updates=True)
-
-    except KeyboardInterrupt:
-        logger.info("⌨️ Получен сигнал остановки")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
-        raise e
-    finally:
-        await on_shutdown()
+    # Цикл перезапуска — бот всегда будет подниматься заново
+    while True:
+        try:
+            await run_bot()
+        except KeyboardInterrupt:
+            logger.info("⌨️ Получен сигнал остановки")
+            break
+        except Exception as e:
+            logger.error(f"🔥 Бот упал с ошибкой: {e}, перезапуск через 5 секунд...")
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated, CallbackQuery
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from telethon.tl.functions.channels import EditAdminRequest, LeaveChannelRequest, \
     InviteToChannelRequest
 from telethon.tl.functions.messages import ExportChatInviteRequest
@@ -128,7 +129,7 @@ async def on_user_join(event: ChatMemberUpdated, state: FSMContext):
             defendant_username=event.new_chat_member.user.username or event.new_chat_member.user.full_name
         )
         await state.update_data(case_number=case_number)
-        await state.set_statef(DisputeState.defendant_arguments)
+        await state.set_state(DisputeState.defendant_arguments)
         print(f"✅ Ответчик {defendant_id} добавлен в дело {case_number}")
 
 
@@ -321,17 +322,19 @@ async def create_group(message: types.Message, state: FSMContext):
     await state.set_state(GroupState.waiting_group_name)
     await message.answer("Введите тему спора / название группы:", reply_markup=ReplyKeyboardRemove())
 
+CASES_PER_PAGE = 10
 
-@router.message(F.text == "📂 Мои дела")
-async def my_cases(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    user_cases = await db.get_user_cases(user_id)
-    if not user_cases:
-        await message.answer("📭 У вас пока нет дел.")
-        return
+
+async def build_cases_text(user_cases, user_id, page: int):
+    start = page * CASES_PER_PAGE
+    end = start + CASES_PER_PAGE
+    # берём последние дела
+    total = len(user_cases)
+    user_cases = list(reversed(user_cases))  # чтобы последние были первыми
+    page_cases = user_cases[start:end]
 
     text = "📂 *Ваши дела:*\n\n"
-    for case in user_cases:
+    for case in page_cases:
         role = "Истец" if case["plaintiff_id"] == user_id else "Ответчик"
         status = "⚖️ В процессе" if case["status"] != "finished" else "✅ Завершено"
         claim_text = f" ({case['claim_amount']}$)" if case.get("claim_amount") else ""
@@ -342,7 +345,45 @@ async def my_cases(message: types.Message, state: FSMContext):
             f"Ваша роль: {role}\n"
             f"Статус: {status}\n\n"
         )
-    await message.answer(text, parse_mode="Markdown")
+    text += f"📊 Всего дел: {total}\n"
+    return text, total
+
+def build_pagination_keyboard(page: int, total: int):
+    builder = InlineKeyboardBuilder()
+    max_page = (total - 1) // CASES_PER_PAGE
+    buttons = []
+    if page > 0:
+        buttons.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"cases_page:{page-1}"))
+    if page < max_page:
+        buttons.append(types.InlineKeyboardButton(text="➡️", callback_data=f"cases_page:{page+1}"))
+    builder.row(*buttons)
+    return builder.as_markup()
+
+@router.message(F.text == "📂 Мои дела")
+async def my_cases(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_cases = await db.get_user_cases(user_id)
+    if not user_cases:
+        await message.answer("📭 У вас пока нет дел.")
+        return
+
+    page = 0
+    text, total = await build_cases_text(user_cases, user_id, page)
+    keyboard = build_pagination_keyboard(page, total)
+    await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith("cases_page:"))
+async def paginate_cases(callback: types.CallbackQuery):
+    page = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+    user_cases = await db.get_user_cases(user_id)
+
+    text, total = await build_cases_text(user_cases, user_id, page)
+    keyboard = build_pagination_keyboard(page, total)
+
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
 
 
 @router.message(F.text == "📝Черновик")
@@ -647,10 +688,10 @@ async def defendant_args(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # user_role = await check_user_role_in_case(case_number, message.from_user.id)
-    # if user_role != "defendant":
-    #     await message.answer("⚠️ Только ответчик может добавлять аргументы на этой стадии.")
-    #     return
+    user_role = await check_user_role_in_case(case_number, message.from_user.id)
+    if user_role != "defendant":
+        await message.answer("⚠️ Только ответчик может добавлять аргументы на этой стадии.")
+        return
 
     if not message.text:
         await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение с аргументами.")
