@@ -149,7 +149,7 @@ async def start_command(message: types.Message, state: FSMContext):
 
 
 @router.message(F.text == "⚖ Начать")
-async def start_chat_message(message: types.Message, state: FSMContext):
+async def start_chat_handler(message: types.Message, state: FSMContext):
     await state.clear()
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -162,8 +162,7 @@ async def start_chat_message(message: types.Message, state: FSMContext):
         one_time_keyboard=True
     )
 
-    await message.bot.send_message(
-        chat_id=message.chat.id,
+    await message.answer(
         text=(
             "Здравствуйте! ⚖️ Я — ИИ судья.\n"
             "Я помогу объективно рассмотреть спор.\n\n"
@@ -173,11 +172,10 @@ async def start_chat_message(message: types.Message, state: FSMContext):
         reply_markup=kb,
         parse_mode="Markdown"
     )
-    # await message.answer()
 
 
-@router.message(F.text == "⬅️ Назад в меню")
-async def back_to_menu(message: types.Message, state: FSMContext):
+@router.callback_query(F.data == "start_chat")
+async def start_chat_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -189,7 +187,19 @@ async def back_to_menu(message: types.Message, state: FSMContext):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    await message.answer("Вы вернулись в меню, ваше дело переходит в черновик")
+
+    await callback.bot.send_message(
+        chat_id=callback.message.chat.id,
+        text=(
+            "Здравствуйте! ⚖️ Я — ИИ судья.\n"
+            "Я помогу объективно рассмотреть спор.\n\n"
+            "💡 *Важно:* Для корректной работы добавьте меня администратором в группу, "
+            "где будет проходить дело."
+        ),
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
 
 
 @router.message(GroupState.waiting_group_name)
@@ -294,7 +304,9 @@ async def bot_added(event: ChatMemberUpdated):
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="⚖ Начать")]
-            ]
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True
         )
         try:
             await event.bot.send_message(
@@ -476,29 +488,14 @@ async def resume_case(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text == "⚖ Начать Дело")
 async def start_dispute(message: types.Message, state: FSMContext):
-    if message.text == "⬅️ Назад в меню":
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="⚖ Начать Дело")],
-                [KeyboardButton(text="📂 Мои дела")],
-                [KeyboardButton(text="📝Черновик")],
-                [KeyboardButton(text="ℹ️ Справка")]
-            ], resize_keyboard=True, one_time_keyboard=True)
-        await state.clear()
-        await message.answer("🔙 Возвращаемся в меню", reply_markup=kb)
-        return
-
     if message.chat.type not in ("group", "supergroup"):
-        kb = ReplyKeyboardMarkup(keyboard=[
-            [KeyboardButton(text="⬅️ Назад в меню")]
-        ], resize_keyboard=True, one_time_keyboard=True)
         await message.answer(
             "⚠️ *Внимание!* Дело нужно создавать в группе.\n\n"
             "📋 *Инструкция:*\n"
             "1. Создайте группу в Telegram\n"
             "2. Добавьте меня в группу как администратора\n"
             "3. В группе напишите /start и выберите «⚖ Начать Дело»",
-            parse_mode="Markdown", reply_markup=kb
+            parse_mode="Markdown"
         )
         return
 
@@ -872,21 +869,6 @@ async def unknown_message_handler(message: types.Message, state: FSMContext):
 
     current_state = await state.get_state()
 
-    # Если пользователь находится в процессе дела, но отправляет неподходящее сообщение
-    # if current_state in (DisputeState.plaintiff_arguments.state, DisputeState.defendant_arguments.state):
-    #     data = await state.get_data()
-    #     case_number = data.get("case_number")
-    #     if case_number:
-    #         user_role = await check_user_role_in_case(case_number, message.from_user.id)
-    #         if user_role:
-    #             # Если пользователь участник дела, но сейчас не его очередь
-    #             if (current_state == DisputeState.plaintiff_arguments.state and user_role != "plaintiff"):
-    #                 await message.answer("⚠️ Сейчас стадия аргументов истца. Ожидайте своей очереди.")
-    #                 return
-    #             elif (current_state == DisputeState.defendant_arguments.state and user_role != "defendant"):
-    #                 await message.answer("⚠️ Сейчас стадия аргументов ответчика. Ожидайте завершения.")
-    #                 return
-
     if current_state is None:
         if message.chat.type == "private":
             kb = ReplyKeyboardMarkup(
@@ -903,18 +885,6 @@ async def unknown_message_handler(message: types.Message, state: FSMContext):
                 "Выберите одну из доступных опций:",
                 reply_markup=kb
             )
-        # else:
-        #     # В группе проверяем активное дело только если нет текущего состояния
-        #     case = await db.get_case_by_chat(message.chat.id)
-        #     if case and case["status"] == "active":
-        #         stage = case.get("stage", "plaintiff")
-        #         stage_text = "истца" if stage == "plaintiff" else "ответчика"
-        #         await message.answer(
-        #             f"⚖️ В этой группе есть активное дело №{case['case_number']}\n"
-        #             f"Тема: {case['topic']}\n"
-        #             f"Текущая стадия: аргументы {stage_text}\n\n"
-        #             f"Используйте команду /start для управления делом."
-        #         )
     else:
         if current_state == DisputeState.waiting_topic.state:
             await message.answer("⚠️ Пожалуйста, введите тему спора текстом.")
