@@ -108,7 +108,7 @@ class PDFGenerator:
         story.append(Paragraph(f"Дата: {current_date}", self.styles['CustomNormal']))
         story.append(Spacer(1, 0.3 * cm))
 
-        subject = f"<b>Предмет спора:</b> {case_data.get('subject', 'Не указан')}"
+        subject = f"<b>Предмет спора:</b> {case_data.get('claim_reason', 'Не указан')}"
         story.append(Paragraph(subject, self.styles['CustomNormal']))
         story.append(Spacer(1, 0.3 * cm))
 

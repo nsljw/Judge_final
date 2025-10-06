@@ -15,6 +15,79 @@ class GeminiService:
         genai.configure(api_key=settings.GEMINI_API_KEY)
         self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
+    async def generate_clarifying_questions(
+            self,
+            case_data: Dict,
+            participants: List[Dict],
+            evidence: List[Dict],
+            current_role: str,
+            round_number: int,
+            bot: Bot = None
+    ) -> List[str]:
+        """
+        Генерирует уточняющие вопросы для участника дела
+        """
+        role_text = "истца" if current_role == "plaintiff" else "ответчика"
+
+        instruction = f"""
+        Ты — ИИ судья. Твоя задача — анализировать аргументы и доказательства {"истца" if current_role == "plaintiff" else "ответчика"} 
+        и задавать уточняющие вопросы, которые помогут раскрыть детали и устранить пробелы. Определи, нужны ли дополнительные 
+        вопросы для полного понимания позиции. Включи вопросы об наличии вещественных доказательствах
+
+        ВАЖНО: 
+        - Это раунд {round_number} из максимум 3 возможных
+        - Задавай только те вопросы, которые помогают глубже понять факты дела
+        - Избегай слишком общих или философских вопросов (например, "Почему вы считаете себя правым?")
+        - Максимум 3 вопроса за раз
+        - Если информации достаточно для вынесения решения, верни пустой массив []
+
+        Критерии для вопросов:
+        1. Конкретизация деталей (точные даты, суммы, места, участники, действия).
+        2. Проверка обоснованности доказательств (например: "Какие документы подтверждают это?", "Есть ли свидетели?").
+        3. Уточнение взаимосвязей между событиями и доказательствами.
+        4. Выявление слабых мест или противоречий в позиции {"истца" if current_role == "plaintiff" else "ответчика"}.
+        5. Фокус на фактах, которые напрямую влияют на исход дела (а не на второстепенные детали).
+
+        Примеры стиля вопросов:
+        - "Уточните, в какой день именно произошло событие?"
+        - "Кто присутствовал при заключении договора?"
+        - "Чем подтверждается сумма, которую вы заявляете?"
+        - "Почему в ваших документах указаны разные даты?"
+
+        Верни JSON в формате:
+        {{
+                "questions": ["вопрос1", "вопрос2", "вопрос3"]
+        }}
+
+        Если вопросы не нужны, верни: {{"questions": []}}
+        """
+
+        messages = await self._build_multimodal_prompt(
+            instruction, case_data, participants, evidence, bot
+        )
+
+        try:
+            response = self.model.generate_content(messages)
+            result = self._parse_questions_response(response.text)
+            return result.get("questions", [])
+        except Exception as e:
+            print(f"Ошибка генерации вопросов: {e}")
+            return []
+
+    def _parse_questions_response(self, response_text: str) -> Dict:
+        """Парсит ответ от Gemini с вопросами"""
+        try:
+            start = response_text.find('{')
+            end = response_text.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_str = response_text[start:end]
+                return json.loads(json_str)
+            else:
+                return {"questions": []}
+        except Exception as e:
+            print(f"Ошибка парсинга вопросов: {e}")
+            return {"questions": []}
+
     async def analyze_case(self, case_data: Dict, participants: List[Dict], evidence: List[Dict],
                            bot: Bot = None) -> Dict:
         """
@@ -65,7 +138,12 @@ class GeminiService:
         Генерация полного постановления и решения (JSON).
         """
         instruction = """Ты — ИИ судья. Рассмотри дело и сформируй полное постановление. 
-    Учитывай предоставленные вещественные доказательства, включая изображения и содержимое документов."""
+    Учитывай предоставленные вещественные доказательства, включая изображения и содержимое документов.
+
+    ВАЖНО: 
+    - Обрати особое внимание на ответы участников на вопросы ИИ (тип 'ai_response')
+    - Переписка из чата (тип 'chat_history') также является важным доказательством
+    - Анализируй контекст и хронологию сообщений в переписке"""
 
         if no_evidence:
             instruction += "\n⚠️ Внимание: доказательства не предоставлены. Решение нужно вынести только на основании аргументов сторон."
@@ -104,7 +182,6 @@ class GeminiService:
                 },
                 "reasoning": ""
             }
-
 
     async def _download_telegram_file(self, bot: Bot, file_id: str) -> bytes:
         """Загружает файл из Telegram по file_id"""
@@ -162,9 +239,8 @@ class GeminiService:
 
     def _is_image(self, filename: str) -> bool:
         """Проверяет, является ли файл изображением"""
-        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.svg']
         return any(filename.lower().endswith(ext) for ext in image_extensions)
-
 
     async def _build_multimodal_prompt(
             self, task_instruction: str, case_data: Dict, participants: List[Dict], evidence: List[Dict],
@@ -174,18 +250,19 @@ class GeminiService:
         Формируем мультимодальный ввод (текст + изображения + содержимое документов).
         """
         base_prompt = f"""
-{task_instruction}
+    {task_instruction}
 
-Номер дела: {case_data.get('case_number')}
-Предмет спора: {case_data.get('topic')}
-Категория: {case_data.get('category')}
-Сумма иска: {case_data.get('claim_amount', 'не указана')}
+    Номер дела: {case_data.get('case_number')}
+    Предмет спора: {case_data.get('topic')}
+    Категория: {case_data.get('category')}
+    Сумма иска: {case_data.get('claim_amount', 'не указана')}
+    Причина иска: {case_data.get('claim_reason', 'не указана')}
 
-Участники:
-{self._format_participants(participants)}
+    Участники:
+    {self._format_participants(participants)}
 
-Доказательства и аргументы:
-"""
+    Доказательства и аргументы:
+    """
         messages: List[Union[str, Dict]] = [base_prompt]
 
         for i, ev in enumerate(evidence, 1):
@@ -194,12 +271,35 @@ class GeminiService:
             if ev["type"] == "text":
                 messages.append(f"\n{i}. {role_text} - Аргумент:\n{ev.get('content', ev.get('description', ''))}\n")
 
+            elif ev["type"] == "ai_response":
+                messages.append(
+                    f"\n{i}. {role_text} - Ответ на вопрос ИИ:\n{ev.get('content', ev.get('description', ''))}\n")
+
+            elif ev["type"] == "chat_history":
+                # История переписки - важное доказательство
+                messages.append(
+                    f"\n{i}. {role_text} - История переписки:\n{ev.get('content', ev.get('description', ''))}\n"
+                    f"[ВАЖНО: Это переписка из чата, анализируй контекст и хронологию сообщений]\n")
+
             elif ev["type"] == "photo" and bot and ev.get("file_path"):
                 try:
                     file_bytes = await self._download_telegram_file(bot, ev["file_path"])
                     if file_bytes:
+                        # Попробуем определить MIME тип изображения
+                        mime_type = "image/jpeg"
+                        if len(file_bytes) >= 4:
+                            # PNG signature
+                            if file_bytes[:4] == b'\x89PNG':
+                                mime_type = "image/png"
+                            # WEBP signature
+                            elif file_bytes[:4] == b'RIFF' and file_bytes[8:12] == b'WEBP':
+                                mime_type = "image/webp"
+                            # GIF signature
+                            elif file_bytes[:3] == b'GIF':
+                                mime_type = "image/gif"
+
                         messages.append({
-                            "mime_type": "image/jpeg",
+                            "mime_type": mime_type,
                             "data": base64.b64encode(file_bytes).decode()
                         })
                         caption = ev.get('content', 'Фото-доказательство')
@@ -218,9 +318,19 @@ class GeminiService:
                             filename = file_info.file_path.split('/')[-1] if file_info.file_path else "document"
                         except:
                             filename = "document"
+
                         if self._is_image(filename):
+                            # Определяем MIME тип для изображений-документов
+                            mime_type = "image/jpeg"
+                            if filename.lower().endswith('.png'):
+                                mime_type = "image/png"
+                            elif filename.lower().endswith('.webp'):
+                                mime_type = "image/webp"
+                            elif filename.lower().endswith('.gif'):
+                                mime_type = "image/gif"
+
                             messages.append({
-                                "mime_type": "image/jpeg",
+                                "mime_type": mime_type,
                                 "data": base64.b64encode(file_bytes).decode()
                             })
                             caption = ev.get('content', 'Изображение (документ)')
@@ -237,6 +347,11 @@ class GeminiService:
                 caption = ev.get('content', 'Видео-доказательство')
                 messages.append(
                     f"\n{i}. {role_text} - Видео: {caption}\n[Содержимое видео не анализируется автоматически]\n")
+
+            elif ev["type"] == "audio" and ev.get("file_path"):
+                caption = ev.get('content', 'Аудио-доказательство')
+                messages.append(
+                    f"\n{i}. {role_text} - Аудио: {caption}\n[Содержимое аудио не анализируется автоматически]\n")
 
             else:
                 description = ev.get('content', ev.get('description', 'Доказательство без описания'))

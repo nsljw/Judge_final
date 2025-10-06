@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = os.getenv("DATABASE_URL")
     DISPUTE_TOKEN_WALLET: str = os.getenv("DISPUTE_TOKEN_WALLET")
     BOT_USERNAME: str = os.getenv("BOT_USERNAME")
+    REDIS_HOST: str = os.getenv("REDIS_HOST")
+    REDIS_PORT: int = os.getenv("REDIS_PORT")
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD")
+    DECODE_RESPONSE: bool = os.getenv("DECODE_RESPONSE")
 
     class Config:
         env_file = ".env"
