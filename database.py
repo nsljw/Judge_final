@@ -4,7 +4,7 @@ import asyncpg
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from conf import settings
+from conf import settings, DELETE_OLDER_THAN_DAYS
 
 
 class Database:
@@ -27,6 +27,7 @@ class Database:
                     claim_amount DECIMAL(15,2),
                     claim_reason VARCHAR(100),
                     mode VARCHAR(20),
+                    version VARCHAR (10) DEFAULT 'v2', 
                     plaintiff_id BIGINT,
                     plaintiff_username VARCHAR(100),
                     defendant_id BIGINT,
@@ -71,6 +72,14 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    user_id BIGINT PRIMARY KEY,
+                    bot_version VARCHAR(10) DEFAULT 'v2',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            ''')
 
     async def create_additional_tables(self):
         """Создание дополнительных таблиц для пользовательских сессий и групп"""
@@ -96,6 +105,25 @@ class Database:
                 )
             ''')
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS ai_answers (
+                    id SERIAL PRIMARY KEY,
+                    case_number VARCHAR(50) NOT NULL,
+                    question TEXT NOT NULL,
+                    answer TEXT NOT NULL,
+                    role VARCHAR(50) NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS bot_users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    contacted_at TIMESTAMP DEFAULT NOW()
+                )          
+            ''')
+            # Новая таблица для AI вопросов (если её нет)
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS ai_questions (
                     id SERIAL PRIMARY KEY,
                     case_number VARCHAR(50) NOT NULL,
@@ -118,23 +146,45 @@ class Database:
             claim_amount: Optional[float] = None,
             status: str = "active",
             stage: str = "plaintiff",
+            version: str = "v2",
     ) -> str:
         async with self.pool.acquire() as conn:
             case_number = f"CASE-{uuid.uuid4().hex[:8].upper()}"
             case_id = await conn.fetchval('''
                 INSERT INTO cases (
                     case_number, chat_id, topic, category, claim_amount,
-                    claim_reason, mode, plaintiff_id, plaintiff_username, status, stage)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    claim_reason, mode, plaintiff_id, plaintiff_username, status, stage, version)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING id
             ''', case_number, chat_id, topic, category, claim_amount, claim_reason, mode, plaintiff_id,
-                                          plaintiff_username, status, stage)
+                                          plaintiff_username, status, stage, version)
             await conn.execute('''
                 INSERT INTO participants (case_id, user_id, username, role)
                 VALUES ($1, $2, $3, 'plaintiff')
                 ON CONFLICT DO NOTHING
             ''', case_id, plaintiff_id, plaintiff_username)
             return case_number
+
+    async def save_bot_user(self, user_id: int, username: str):
+        """Сохранить пользователя, написавшего боту"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO bot_users (user_id, username, contacted_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (user_id) 
+                DO UPDATE SET username = $2, contacted_at = NOW()
+            """, user_id, username)
+
+    async def get_defendant_by_username(self, username: str):
+        """Получить информацию о пользователе по username"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow("""
+                SELECT user_id, username 
+                FROM bot_users 
+                WHERE LOWER(username) = LOWER($1)
+                ORDER BY contacted_at DESC
+                LIMIT 1
+            """, username)
 
     async def set_defendant(self, case_number: str, defendant_id: int, defendant_username: str):
         async with self.pool.acquire() as conn:
@@ -154,6 +204,32 @@ class Database:
                 ON CONFLICT DO NOTHING
             ''', case_id, defendant_id, defendant_username)
             print(f"✅ Ответчик {defendant_id} назначен для дела {case_number}")
+
+    async def set_user_version(self, user_id: int, version: str):
+        """Установить версию бота для пользователя"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO user_settings (user_id, bot_version, updated_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (user_id) 
+                DO UPDATE SET bot_version = $2, updated_at = NOW()
+            ''', user_id, version)
+
+    async def get_user_version(self, user_id: int) -> str:
+        """Получить версию бота для пользователя"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT bot_version FROM user_settings WHERE user_id = $1
+            ''', user_id)
+            return row['bot_version'] if row else 'v2'
+
+    async def get_case_version(self, case_number: str) -> str:
+        """Получить версию бота по номеру дела"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT version FROM cases WHERE case_number = $1
+            ''', case_number)
+            return row['version'] if row else 'v2'
 
     async def get_case_by_number(self, case_number: str) -> Optional[Dict]:
         async with self.pool.acquire() as conn:
@@ -176,6 +252,14 @@ class Database:
             if row:
                 return dict(row)
             return None
+
+    async def save_ai_answer(self, case_number: str, question: str, answer: str, role: str, round_number: int):
+        """Сохраняет ответ на вопрос ИИ"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO ai_answers (case_number, question, answer, role, round_number)
+                VALUES ($1, $2, $3, $4, $5)
+            ''', case_number, question, answer, role, round_number)
 
     async def get_user_cases(self, user_id: int) -> List[Dict]:
         async with self.pool.acquire() as conn:
@@ -269,7 +353,6 @@ class Database:
 
     async def add_participant(self, case_number: str, user_id: int, username: str, role: str):
         async with self.pool.acquire() as conn:
-            # Получаем ID дела по его номеру
             case = await conn.fetchrow(
                 "SELECT id FROM cases WHERE case_number=$1", case_number
             )
@@ -373,14 +456,12 @@ class Database:
     async def get_case_with_full_info(self, case_number: str) -> Optional[Dict]:
         """Получение дела с полной информацией включая участников и доказательства"""
         async with self.pool.acquire() as conn:
-            # Основная информация о деле
             case_row = await conn.fetchrow('SELECT * FROM cases WHERE case_number = $1', case_number)
             if not case_row:
                 return None
 
             case_dict = dict(case_row)
 
-            # Участники
             participants = await conn.fetch('''
                 SELECT role, username, user_id, joined_at
                 FROM participants 
@@ -389,7 +470,6 @@ class Database:
             ''', case_dict['id'])
             case_dict['participants'] = [dict(p) for p in participants]
 
-            # Доказательства
             evidence = await conn.fetch('''
                 SELECT * FROM evidence 
                 WHERE case_id = $1 
@@ -403,11 +483,11 @@ class Database:
         """Удаление дела и всех связанных данных"""
         async with self.pool.acquire() as conn:
             try:
-                # Удаляем связанные данные (CASCADE должен это делать автоматически)
                 await conn.execute('DELETE FROM ai_questions WHERE case_number = $1', case_number)
+                await conn.execute('DELETE FROM ai_answers WHERE case_number = $1', case_number)
                 await conn.execute('DELETE FROM decisions WHERE case_number = $1', case_number)
+                await conn.execute('DELETE FROM dispute_groups WHERE case_number = $1', case_number)
 
-                # Удаляем само дело
                 deleted_count = await conn.fetchval(
                     'DELETE FROM cases WHERE case_number = $1 RETURNING id',
                     case_number
@@ -485,7 +565,6 @@ class Database:
             result = []
             for row in rows:
                 evidence_dict = dict(row)
-                # Для совместимости с gemini_service
                 if evidence_dict.get('file_id'):
                     evidence_dict['file_path'] = evidence_dict['file_id']
                 result.append(evidence_dict)
@@ -494,7 +573,6 @@ class Database:
     async def get_answered_ai_questions_count(self, case_number: str, role: str, round_number: int) -> int:
         """Получить количество отвеченных вопросов в данном раунде"""
         async with self.pool.acquire() as conn:
-            # Сначала получаем case_id по case_number
             case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number = $1', case_number)
             if not case_id:
                 return 0
@@ -509,6 +587,86 @@ class Database:
             ''', case_id, role, round_number)
 
             return count or 0
+
+    async def clean_old_records(self):
+        """Удаление дел старше DELETE_OLDER_THAN_DAYS дней"""
+        try:
+            async with self.pool.acquire() as conn:
+                # Получаем список дел для удаления
+                old_cases = await conn.fetch(f"""
+                    SELECT case_number, topic, created_at
+                    FROM cases
+                    WHERE created_at < NOW() - INTERVAL '{DELETE_OLDER_THAN_DAYS} days'
+                """)
+
+                if not old_cases:
+                    print(f"🧹 Нет дел старше {DELETE_OLDER_THAN_DAYS} дней для удаления")
+                    return
+
+                print(f"🗑️ Найдено {len(old_cases)} дел для удаления:")
+                for case in old_cases:
+                    print(f"  - {case['case_number']}: {case['topic'][:50]} (создано: {case['created_at']})")
+
+                # Удаляем связанные данные
+                deleted_ai_questions = await conn.execute(f"""
+                    DELETE FROM ai_questions
+                    WHERE case_number IN (
+                        SELECT case_number FROM cases
+                        WHERE created_at < NOW() - INTERVAL '{DELETE_OLDER_THAN_DAYS} days'
+                    )
+                """)
+
+                deleted_ai_answers = await conn.execute(f"""
+                    DELETE FROM ai_answers
+                    WHERE case_number IN (
+                        SELECT case_number FROM cases
+                        WHERE created_at < NOW() - INTERVAL '{DELETE_OLDER_THAN_DAYS} days'
+                    )
+                """)
+
+                deleted_decisions = await conn.execute(f"""
+                    DELETE FROM decisions
+                    WHERE case_number IN (
+                        SELECT case_number FROM cases
+                        WHERE created_at < NOW() - INTERVAL '{DELETE_OLDER_THAN_DAYS} days'
+                    )
+                """)
+
+                deleted_groups = await conn.execute(f"""
+                    DELETE FROM dispute_groups
+                    WHERE case_number IN (
+                        SELECT case_number FROM cases
+                        WHERE created_at < NOW() - INTERVAL '{DELETE_OLDER_THAN_DAYS} days'
+                    )
+                """)
+
+                # Удаляем сами дела (CASCADE удалит evidence и participants)
+                result = await conn.execute(f"""
+                    DELETE FROM cases
+                    WHERE created_at < NOW() - INTERVAL '{DELETE_OLDER_THAN_DAYS} days'
+                """)
+
+                print(f"✅ Очистка завершена:")
+                print(f"   - Удалено дел: {len(old_cases)}")
+                print(f"   - Удалено AI вопросов: {deleted_ai_questions}")
+                print(f"   - Удалено AI ответов: {deleted_ai_answers}")
+                print(f"   - Удалено решений: {deleted_decisions}")
+                print(f"   - Удалено групп: {deleted_groups}")
+
+        except Exception as e:
+            print(f"❌ Ошибка при очистке старых записей: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def updated_at_case(self, case_number: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                    UPDATE cases
+                    SET updated_at = NOW()
+                    WHERE case_number = $1
+                ''', case_number)
+
+
 
 
 db = Database()

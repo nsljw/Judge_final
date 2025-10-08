@@ -6,8 +6,9 @@ import os
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from conf import settings
+from conf import settings, CLEAN_INTERVAL_DAYS
 from database import db
 from handlers import register_handlers
 from user_client import user_client
@@ -88,6 +89,11 @@ async def run_bot():
     try:
         await on_startup()
         logger.info("🔄 Начинается поллинг бота...")
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(db.clean_old_records, "interval", days=CLEAN_INTERVAL_DAYS)
+        scheduler.start()
+        print(f"🕒 Планировщик запущен: каждые {CLEAN_INTERVAL_DAYS} дня")
+
         await dp.start_polling(bot, skip_updates=True)
     except Exception as e:
         logger.error(f"❌ Критическая ошибка во время работы бота: {e}", exc_info=True)

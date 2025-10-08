@@ -64,3 +64,7 @@ DISPUTE_EXAMPLES = [
     "поставка бракованного товара",
     "нарушение сроков аренды"
 ]
+
+
+CLEAN_INTERVAL_DAYS = 3
+DELETE_OLDER_THAN_DAYS = 7
