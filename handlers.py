@@ -13,12 +13,12 @@ from aiogram.types import (
     FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated, CallbackQuery
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from telethon.errors import UserAlreadyParticipantError, UserPrivacyRestrictedError
-from telethon.tl.functions.channels import EditAdminRequest, InviteToChannelRequest
+from telethon.errors import UsernameInvalidError, UsernameNotOccupiedError, UserPrivacyRestrictedError
+from telethon.errors.rpcerrorlist import PeerIdInvalidError, ChannelPrivateError, ChatWriteForbiddenError, \
+    ChatAdminRequiredError
+from telethon.tl.functions.channels import EditAdminRequest
 from telethon.tl.functions.messages import ExportChatInviteRequest
 from telethon.tl.types import ChatAdminRights
-from telethon.errors import UsernameInvalidError, UsernameNotOccupiedError, UserPrivacyRestrictedError
-from telethon.errors.rpcerrorlist import PeerIdInvalidError, ChannelPrivateError, ChatWriteForbiddenError, ChatAdminRequiredError
 
 from database import db
 from gemini_servise import gemini_service
@@ -443,9 +443,63 @@ async def on_user_join(event: ChatMemberUpdated, state: FSMContext):
         await state.set_state(DisputeState.defendant_arguments)
         print(f"✅ Ответчик {defendant_id} добавлен в дело {case_number}")
 
+        try:
+            kb = get_main_menu_keyboard()
+            await event.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ @{event.new_chat_member.user.username or event.new_chat_member.user.full_name}, вы добавлены в дело #{case_number} как ответчик.\n\nВыберите действие:",
+                reply_markup=kb
+            )
+        except Exception as e:
+            print(f"Не удалось отправить меню ответчику: {e}")
+
 
 @router.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext):
+    """Обработка команды /start (обычный старт + приглашение ответчика)"""
+
+    # Парсим аргументы команды
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+
+    # СЛУЧАЙ 1: Это приглашение ответчика (deep link)
+    if args and args[0].startswith("defendant_case_"):
+        case_number = args[0].replace("defendant_case_", "")
+        user_id = message.from_user.id
+        username = message.from_user.username
+
+        if not username:
+            await message.answer(
+                "⚠️ У вас не установлен username в Telegram.\n"
+                "Для участия в деле необходимо установить username в настройках Telegram."
+            )
+            return
+
+        # Сохраняем данные пользователя
+        await state.update_data(
+            defendant_id=user_id,
+            defendant_username=username,
+            defendant_case=case_number
+        )
+
+        # Отправляем кнопку подтверждения
+        kb_confirm = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить участие в деле",
+                    callback_data=f"confirm_defendant_participation:{case_number}:{user_id}:{username}"
+                )
+            ]
+        ])
+
+        await message.answer(
+            f"👋 Добро пожаловать!\n\n"
+            f"Вы были приглашены в качестве ответчика по делу #{case_number}.\n\n"
+            f"Вернитесь в чат группы и нажмите кнопку подтверждения участия.",
+            reply_markup=kb_confirm
+        )
+        return
+
+    # СЛУЧАЙ 2: Обычный /start (выбор версии бота)
     if message.chat.type == "private":
         await db.save_bot_user(
             message.from_user.id,
@@ -456,11 +510,14 @@ async def start_command(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="Версия 1 (Создание группы)", callback_data="start_v1")],
         [InlineKeyboardButton(text="Версия 2 (Работа в готовой группе)", callback_data="start_v2")]
     ])
-    await message.answer("Добро пожаловать, я ИИ судья, который поможет вам решить ваш спор или конфликт\n"
-                         "Выберите подходящую версию чтобы продолжить:\n\n"
-                         "*⚠ Важно! перед добавлением бота в группу вручную,"
-                         " измените настроки группы(история чата должна быть открыта!)*",
-                         reply_markup=kb)
+
+    await message.answer(
+        "Добро пожаловать, я ИИ судья, который поможет вам решить ваш спор или конфликт\n"
+        "Выберите подходящую версию чтобы продолжить:\n\n"
+        "*⚠ Важно! перед добавлением бота в группу вручную,"
+        " измените настроки группы(история чата должна быть открыта!)*",
+        reply_markup=kb
+    )
 
 
 @router.callback_query(F.data.startswith("start_v1"))
@@ -628,7 +685,7 @@ async def input_group_name(message: types.Message, state: FSMContext):
                 f"📋 Название: {safe_title}\n\n"
                 f"🔗 Ссылка для входа в группу:\n{safe_link}\n\n"
                 f"👆 Нажмите на ссылку выше, чтобы присоединиться к группе и начать дело\\.\n\n"
-                f"⚠️ *Важно:* После входа в группу нажмите «⚖ Начать Дело»"
+                f"⚠️ *Важно:* После входа в группу нажмите «⚖ Начать»"
             )
 
             await message.answer(text, parse_mode="MarkdownV2")
@@ -670,6 +727,43 @@ async def delete_left_event(message: types.Message):
         print("Бота кикнули с канала, не удалось удалить сообщение")
 
 
+async def get_role_specific_keyboard(state: FSMContext, user_id: int, current_state_name: str):
+    """Возвращает клавиатуру в зависимости от роли пользователя"""
+    data = await state.get_data()
+    case_number = data.get("case_number")
+
+    if not case_number:
+        return get_main_menu_keyboard()
+
+    user_role = await check_user_role_in_case(case_number, user_id)
+
+    # Если пользователь не участник дела - возвращаем пустую клавиатуру
+    if not user_role:
+        return ReplyKeyboardMarkup(
+            keyboard=[],
+            resize_keyboard=True
+        )
+
+    # Базовые кнопки для участников
+    if current_state_name in [
+        DisputeState.plaintiff_arguments.state,
+        DisputeState.defendant_arguments.state,
+        DisputeState.waiting_ai_question_response.state
+    ]:
+        keyboard = [
+            [KeyboardButton(text="Завершить аргументы")],
+            [KeyboardButton(text="🔙 Назад в Меню")]
+        ]
+
+        # Только истец может ставить на паузу
+        if user_role == "plaintiff":
+            keyboard.insert(1, [KeyboardButton(text="⏸️ Поставить дело на паузу")])
+
+        return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+    return get_main_menu_keyboard()
+
+
 @router.my_chat_member()
 async def bot_added(event: ChatMemberUpdated):
     if (event.old_chat_member is None or event.old_chat_member.status in ("kicked", "left")) \
@@ -677,17 +771,12 @@ async def bot_added(event: ChatMemberUpdated):
         return
 
     if event.new_chat_member.user.id == (await event.bot.get_me()).id:
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="⚖ Начать")]
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True
-        )
+        # Когда бота добавляют в группу, всем участникам отправляем полное меню
+        kb = get_main_menu_keyboard()
         try:
             await event.bot.send_message(
                 chat_id=event.chat.id,
-                text="Привет! Я готов вести это дело. Нажмите кнопку ниже для начала:",
+                text="Привет! Я готов вести это дело. Выберите действие:",
                 reply_markup=kb
             )
         except Exception as e:
@@ -907,14 +996,10 @@ async def resume_case(callback: CallbackQuery, state: FSMContext):
         await state.set_state(DisputeState.waiting_ai_question_response)
 
         role_text = "Истец" if answering_role == "plaintiff" else "Ответчик"
-        kb_questions = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Пропустить вопрос")],
-                [KeyboardButton(text="⏸️ Поставить дело на паузу")],
-                [KeyboardButton(text="🔙 Назад в Меню")]
-            ],
-            resize_keyboard=True
-        )
+
+        # Получаем клавиатуру с учетом роли
+        kb = await get_role_specific_keyboard(state, callback.message.from_user.id,
+                                              DisputeState.waiting_ai_question_response.state)
 
         await callback.message.answer(
             f"✅ Вы продолжаете дело №{case_number}\n"
@@ -1364,7 +1449,7 @@ async def input_claim_amount(message: types.Message, state: FSMContext):
             resize_keyboard=True
         )
         await message.answer(
-            "💰 Введите сумму иска в $ (например: 1500):",
+            "💰 Введите сумму иска в BTC (например: 0.00001):",
             reply_markup=kb
         )
         return
@@ -1886,7 +1971,7 @@ async def handle_forwarded_messages(message: types.Message, state: FSMContext):
         forwarded_messages = data.get("forwarded_messages", [])
         forwarded_messages.append({
             "from_user": message.forward_from.username if message.forward_from else
-                          message.forward_from_chat.title if message.forward_from_chat else "Неизвестно",
+            message.forward_from_chat.title if message.forward_from_chat else "Неизвестно",
             "text": message.text or message.caption or "(медиафайл)"
         })
         await state.update_data(forwarded_messages=forwarded_messages)
@@ -1908,10 +1993,7 @@ async def select_defendant_method(message: types.Message, state: FSMContext):
     text = message.text.strip() if message.text else ""
     data = await state.get_data()
     case_number = data.get("case_number")
-
-    # Получаем версию из БД
     bot_version = await db.get_case_version(case_number)
-
     chat_id = message.chat.id
     is_supergroup = data.get("is_supergroup", True)
 
@@ -1920,7 +2002,7 @@ async def select_defendant_method(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # 🔗 Пригласительная ссылка (доступна для всех версий)
+    # 🔗 Пригласительная ссылка
     if text == "🔗 Пригласительная ссылка":
         await db.update_case_stage(case_number, "plaintiff")
 
@@ -1976,6 +2058,7 @@ async def select_defendant_method(message: types.Message, state: FSMContext):
         )
         return
 
+    # Неверный выбор
     keyboard_buttons = []
     if bot_version == "v2":
         keyboard_buttons.append([KeyboardButton(text="👤 По юзернейму (@username)")])
@@ -1989,67 +2072,71 @@ async def select_defendant_method(message: types.Message, state: FSMContext):
 async def find_user_in_chat(user_client, chat_id, username, limit=100):
     """Поиск пользователя через Telethon"""
     found_user = None
-    # сначала ищем по сообщениям в чате
+
+    # Ищем по сообщениям в чате
     async for msg in user_client.client.iter_messages(chat_id, limit=limit):
         sender = getattr(msg, 'sender', None)
         if sender and getattr(sender, 'username', None):
             if sender.username.lower() == username.lower():
                 found_user = sender
                 break
-    # если не нашли — пробуем get_entity (может выкинуть исключение PeerIdInvalidError и т.д.)
+
+    # Если не нашли — пробуем get_entity
     if not found_user:
         found_user = await user_client.client.get_entity(username)
+
     return found_user
 
 
-async def send_defendant_confirmation_request(message: types.Message, state: FSMContext, case_number: str,
-                                              username: str):
-    """Отправка запроса на подтверждение ответчику через aiogram (без user_id)"""
-    kb_confirm = InlineKeyboardMarkup(inline_keyboard=[
+async def send_defendant_invite_via_tag(message: types.Message, state: FSMContext, case_number: str, username: str):
+    """Отправка приглашения через тегание с кнопкой для перехода в ЛС бота"""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="✅ Принять участие в деле",
-                callback_data=f"defendant_confirm_by_username:{case_number}:{username}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="❌ Отклонить",
-                callback_data=f"defendant_reject_by_username:{case_number}:{username}"
+                text="🤖 Открыть бота и выполнить /start",
+                url=f"https://t.me/judge_ai_tgbot?start=defendant_case_{case_number}"
             )
         ]
     ])
 
     notification_text = (
         f"@{username}, вас назначили ответчиком в деле #{case_number}.\n\n"
-        f"Для участия в деле, пожалуйста:\n"
-        f"1️⃣ Откройте личный чат с ботом @judge_ai_tgbot\n"
-        f"2️⃣ Выполните команду /start\n"
-        f"3️⃣ Нажмите кнопку ✅ \"Принять участие\" ниже"
+        f"Для участия в деле:\n"
+        f"1️⃣ Нажмите кнопку ниже\n"
+        f"2️⃣ Откройте личный чат с ботом\n"
+        f"3️⃣ Выполните команду /start\n"
+        f"4️⃣ Подтвердите участие кнопкой в этом чате"
     )
 
-    await message.answer(notification_text, reply_markup=kb_confirm)
+    await message.answer(notification_text, reply_markup=kb)
+
+    # Сохраняем данные для подтверждения
+    await state.update_data(
+        pending_defendant_username=username,
+        pending_defendant_case=case_number
+    )
+
     await message.answer(
-        f"📨 Уведомление отправлено @{username}\n"
+        f"📨 Приглашение отправлено @{username}\n"
         f"Ожидаем, что ответчик откроет чат с ботом и подтвердит участие..."
     )
+
     await state.set_state(DisputeState.waiting_defendant_confirmation)
 
 
-async def finalize_after_found(source_message, state, case_number, found_user, username):
-    """Общая логика после того как пользователь найден через Telethon"""
+async def finalize_defendant_with_telethon(message: types.Message, state: FSMContext, case_number: str,
+                                           found_user, username: str):
+    """Финализация после успешного поиска через Telethon"""
     defendant_id = found_user.id
-    if getattr(found_user, 'bot', False):
-        await source_message.answer(f"⚠️ @{username} — это бот. Укажите реального пользователя.")
-        return
-    if defendant_id == source_message.from_user.id:
-        await source_message.answer("⚠️ Вы не можете быть ответчиком в собственном деле.")
-        return
 
-    await state.update_data(
-        temp_defendant_id=defendant_id,
-        temp_defendant_username=username
-    )
+    # Проверки
+    if getattr(found_user, 'bot', False):
+        await message.answer(f"⚠️ @{username} — это бот. Укажите реального пользователя.")
+        return False
+
+    if defendant_id == message.from_user.id:
+        await message.answer("⚠️ Вы не можете быть ответчиком в собственном деле.")
+        return False
 
     kb_confirm = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -2068,24 +2155,27 @@ async def finalize_after_found(source_message, state, case_number, found_user, u
 
     notification_text = (
         f"@{username}, вас назначили ответчиком в деле #{case_number}.\n\n"
-        f"Нажмите нужную кнопку ниже, чтобы подтвердить участие:"
+        f"Нажмите нужную кнопку ниже, чтобы подтвердить или отклонить участие:"
     )
-    await source_message.answer(notification_text, reply_markup=kb_confirm)
-    await source_message.answer(
+
+    await message.answer(notification_text, reply_markup=kb_confirm)
+    await message.answer(
         f"📨 Уведомление отправлено @{username}\nОжидаем подтверждения от ответчика..."
     )
-    await source_message.answer_state(DisputeState.waiting_defendant_confirmation)
+    await state.set_state(DisputeState.waiting_defendant_confirmation)
+    return True
 
 
 @router.message(DisputeState.waiting_defendant_username)
-async def input_defendant_from_messages(message: types.Message, state: FSMContext):
-    """Обработка username ответчика с поиском в сообщениях группы"""
-    data = await state.get_data()
+async def input_defendant_username(message: types.Message, state: FSMContext):
+    """Обработка username ответчика"""
     if message.new_chat_members or message.left_chat_member:
         return
+
     if message.text == "🔙 Назад в Меню":
         await return_to_main_menu(message, state)
         return
+
     if not message.text:
         await message.answer("⚠️ Пожалуйста, введите юзернейм ответчика.")
         return
@@ -2093,25 +2183,27 @@ async def input_defendant_from_messages(message: types.Message, state: FSMContex
     username = message.text.strip()
     if username.startswith('@'):
         username = username[1:]
+
+    data = await state.get_data()
     case_number = data.get("case_number")
     chat_id = message.chat.id
+
     if not case_number:
         await message.answer("⚠️ Ошибка: дело не найдено.")
         await state.clear()
         return
 
-    # Сохраняем попытку в state — понадобится при Retry
-    await state.update_data(
-        last_attempt_username=username,
-        last_attempt_chat_id=chat_id,
-        last_attempt_case_number=case_number
-    )
-
-    # Попытка через Telethon (user_client)
+    # Если есть user_client - пытаемся найти через Telethon
     if user_client and user_client.is_connected:
         try:
             found_user = await find_user_in_chat(user_client, chat_id, username, limit=100)
-            if not found_user:
+
+            if found_user:
+                # Успешно нашли - финализируем с полными данными
+                await finalize_defendant_with_telethon(message, state, case_number, found_user, username)
+                return
+            else:
+                # Не нашли в чате
                 await message.answer(
                     f"⚠️ Не удалось найти пользователя @{username} в этом чате.\n\n"
                     "Убедитесь что:\n"
@@ -2121,114 +2213,98 @@ async def input_defendant_from_messages(message: types.Message, state: FSMContex
                 )
                 return
 
-            await finalize_after_found(message, state, case_number, found_user, username)
-            return
-
         except Exception as e:
-            # Распознаём "invalid peer" по типу исключения или по тексту
-            is_invalid_peer = False
-            if PeerIdInvalidError is not None and isinstance(e, PeerIdInvalidError):
-                is_invalid_peer = True
-            elif isinstance(e, (UsernameInvalidError, UsernameNotOccupiedError, UserPrivacyRestrictedError,
-                                ChannelPrivateError, ChatWriteForbiddenError, ChatAdminRequiredError)):
-                is_invalid_peer = True
-            else:
-                # fallback: часто Telethon пишет 'An invalid Peer was used'
-                if 'invalid peer' in str(e).lower() or 'invalid peer' in repr(e).lower():
-                    is_invalid_peer = True
-
             print(f"Ошибка поиска через Telethon: {e}")
 
-            if is_invalid_peer:
-                # Уведомляем пользователя и даём кнопки: открыть бота в ЛС и повторить поиск
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="Открыть @judge_ai_tgbot (в ЛС и выполнить /start)",
-                            url="https://t.me/judge_ai_tgbot"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="✅ Я сделал /start — Повторить поиск",
-                            callback_data=f"retry_find_defendant:{case_number}:{username}:{chat_id}"
-                        )
-                    ]
-                ])
+            is_access_error = False
+            error_types = (
+                PeerIdInvalidError, UsernameInvalidError, UsernameNotOccupiedError,
+                UserPrivacyRestrictedError, ChannelPrivateError,
+                ChatWriteForbiddenError, ChatAdminRequiredError
+            )
+
+            if any(isinstance(e, err_type) for err_type in error_types if err_type is not None):
+                is_access_error = True
+            elif 'invalid peer' in str(e).lower():
+                is_access_error = True
+
+            if is_access_error:
+                print(f"Telethon недоступен для @{username}, используем метод с тегом")
+                await send_defendant_invite_via_tag(message, state, case_number, username)
+                return
+            else:
+                # Другая ошибка
                 await message.answer(
-                    "⚠️ Не удалось получить доступ к пользователю из-за ограничений (invalid peer).\n\n"
-                    "1) Откройте личные сообщения с ботом @judge_ai_tgbot и выполните команду /start.\n"
-                    "2) Вернитесь в этот чат и нажмите кнопку «Повторить поиск» — я повторю попытку автоматически.",
-                    reply_markup=kb
+                    f"⚠️ Произошла ошибка при поиске пользователя: {str(e)}\n"
+                    f"Попробуйте еще раз или используйте пригласительную ссылку."
                 )
                 return
-            else:
-                # Прочая ошибка — fallback на aiogram метод
-                print(f"Telethon недоступен, переходим на aiogram метод")
-                await send_defendant_confirmation_request(message, state, case_number, username)
-                return
 
-    # Если user_client недоступен — используем стандартный aiogram flow
     else:
-        print(f"User-client недоступен, используем aiogram метод для @{username}")
-        await send_defendant_confirmation_request(message, state, case_number, username)
-        return
+        print(f"User-client недоступен, используем метод с тегом для @{username}")
+        await send_defendant_invite_via_tag(message, state, case_number, username)
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("retry_find_defendant:"))
-async def handle_retry_find_defendant(callback: CallbackQuery, state: FSMContext):
-    """Повторная попытка поиска пользователя через Telethon"""
-    data = callback.data or ""
-
-    await callback.answer()
-
+@router.callback_query(lambda c: c.data and c.data.startswith("confirm_defendant_participation:"))
+async def handle_confirm_defendant_participation(callback: CallbackQuery, state: FSMContext):
+    """Обработка подтверждения участия от ответчика после /start в боте"""
     try:
-        _, case_number, username, chat_id_str = data.split(":", 3)
-        chat_id = int(chat_id_str)
-    except Exception:
-        await callback.message.answer("⚠️ Некорректные данные для повтора. Повторите действие вручную.")
-        return
-
-    if user_client and user_client.is_connected:
-        try:
-            found_user = await find_user_in_chat(user_client, chat_id, username, limit=100)
-            if not found_user:
-                await callback.message.answer(
-                    f"⚠️ Всё ещё не удалось найти @{username}.\n"
-                    "Проверьте, что ответчик выполнил /start у @judge_ai_tgbot и доступен в группе."
-                )
-                return
-
-            await finalize_after_found(callback.message, state, case_number, found_user, username)
-
-        except Exception as e:
-            print(f"Ошибка при повторном поиске: {e}")
-            # Повторная проверка на invalid peer
-            if 'invalid peer' in str(e).lower() or (
-                    PeerIdInvalidError is not None and isinstance(e, PeerIdInvalidError)):
-                await callback.message.answer(
-                    "⚠️ Всё ещё ошибка доступа (invalid peer). Убедитесь, что ответчик действительно открыл чат с @judge_ai_tgbot и выполнил /start."
-                )
-            else:
-                await callback.message.answer("⚠️ Ошибка при повторном поиске. Попробуйте позже.")
-    else:
-        await callback.message.answer("⚠️ User-client отключён. Попробуйте позже.")
-
-
-@router.callback_query(lambda c: c.data and c.data.startswith("defendant_confirm_by_username:"))
-async def handle_defendant_confirm_by_username(callback: CallbackQuery, state: FSMContext):
-    """Обработка подтверждения участия ответчиком (когда user_id получен только сейчас)"""
-    try:
-        _, case_number, username = callback.data.split(":", 2)
+        _, case_number, user_id_str, username = callback.data.split(":", 3)
+        user_id = int(user_id_str)
     except Exception:
         await callback.answer("⚠️ Ошибка данных", show_alert=True)
         return
 
-    defendant_id = callback.from_user.id
+    # Проверяем, что подтверждает правильный пользователь
+    if callback.from_user.id != user_id:
+        await callback.answer(
+            "⚠️ Это подтверждение предназначено для другого пользователя",
+            show_alert=True
+        )
+        return
+
     defendant_username = callback.from_user.username or username
 
+    # Получаем данные из state группового чата
+    data = await state.get_data()
+    pending_username = data.get("pending_defendant_username", "").lower()
+
+    # Проверяем совпадение username
+    if pending_username and defendant_username.lower() != pending_username:
+        await callback.answer(
+            f"⚠️ Username не совпадает. Ожидается @{pending_username}",
+            show_alert=True
+        )
+        return
+
+    await callback.answer("✅ Вы подтверждены в качестве ответчика!")
+
+    # Сохраняем данные ответчика в БД
+    await db.update_defendant(case_number, user_id, defendant_username)
+    await db.update_case_stage(case_number, "plaintiff")
+
+    # Уведомление в группу
+    await callback.message.answer(
+        f"✅ @{defendant_username} подтвердил участие в деле #{case_number} в качестве ответчика!\n\n"
+        f"Дело переходит к стадии предоставления аргументов истца."
+    )
+
+    # Переходим к аргументам истца
+    await start_plaintiff_arguments(callback.message, state, case_number)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("defendant_confirm:"))
+async def handle_defendant_confirm_telethon(callback: CallbackQuery, state: FSMContext):
+    """Обработка подтверждения участия ответчиком (найден через Telethon)"""
+    try:
+        _, case_number, defendant_id_str, username = callback.data.split(":", 3)
+        defendant_id = int(defendant_id_str)
+    except Exception:
+        await callback.answer("⚠️ Ошибка данных", show_alert=True)
+        return
+
     # Проверка, что подтверждает нужный пользователь
-    if defendant_username.lower() != username.lower():
+    if callback.from_user.id != defendant_id:
         await callback.answer(
             "⚠️ Это уведомление предназначено для другого пользователя",
             show_alert=True
@@ -2236,6 +2312,8 @@ async def handle_defendant_confirm_by_username(callback: CallbackQuery, state: F
         return
 
     await callback.answer("✅ Вы приняты в качестве ответчика!")
+
+    defendant_username = callback.from_user.username or username
 
     # Сохраняем данные ответчика
     await db.update_defendant(case_number, defendant_id, defendant_username)
@@ -2245,29 +2323,25 @@ async def handle_defendant_confirm_by_username(callback: CallbackQuery, state: F
         f"✅ @{defendant_username} подтвердил участие в деле #{case_number} в качестве ответчика!"
     )
 
-    # Продолжаем процесс
-    # Получаем состояние истца для продолжения
-    # (здесь нужно будет найти состояние истца или создать новое сообщение)
     await callback.message.answer(
-        f"✅ Ответчик @{defendant_username} добавлен в дело #{case_number}.\n"
-        f"Дело переходит к стадии предоставления аргументов истца."
+        f"Дело #{case_number} переходит к стадии предоставления аргументов истца."
     )
+
     await start_plaintiff_arguments(callback.message, state, case_number)
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("defendant_reject_by_username:"))
-async def handle_defendant_reject_by_username(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(lambda c: c.data and c.data.startswith("defendant_reject:"))
+async def handle_defendant_reject(callback: CallbackQuery, state: FSMContext):
     """Обработка отклонения участия ответчиком"""
     try:
-        _, case_number, username = callback.data.split(":", 2)
+        _, case_number, defendant_id_str, username = callback.data.split(":", 3)
+        defendant_id = int(defendant_id_str)
     except Exception:
         await callback.answer("⚠️ Ошибка данных", show_alert=True)
         return
 
-    defendant_username = callback.from_user.username or username
-
     # Проверка, что отклоняет нужный пользователь
-    if defendant_username.lower() != username.lower():
+    if callback.from_user.id != defendant_id:
         await callback.answer(
             "⚠️ Это уведомление предназначено для другого пользователя",
             show_alert=True
@@ -2276,10 +2350,14 @@ async def handle_defendant_reject_by_username(callback: CallbackQuery, state: FS
 
     await callback.answer("Вы отклонили участие в деле")
 
+    defendant_username = callback.from_user.username or username
+
     await callback.message.edit_text(
         f"❌ @{defendant_username} отклонил участие в деле #{case_number}.\n\n"
         f"Истец может выбрать другого ответчика."
     )
+
+    await state.clear()
 
 
 async def start_plaintiff_arguments(message: types.Message, state: FSMContext, case_number: str):
@@ -2681,14 +2759,9 @@ async def continue_case_button_handler(message: types.Message, state: FSMContext
         await state.set_state(DisputeState.waiting_ai_question_response)
 
         role_text = "Истец" if answering_role == "plaintiff" else "Ответчик"
-        kb_questions = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Пропустить вопрос")],
-                [KeyboardButton(text="⏸️ Поставить дело на паузу")],
-                [KeyboardButton(text="🔙 Назад в Меню")]
-            ],
-            resize_keyboard=True
-        )
+
+        # Получаем клавиатуру с учетом роли
+        kb_questions = await get_role_specific_keyboard(state, message.from_user.id, DisputeState.waiting_ai_question_response.state)
 
         await message.answer(
             f"✅ Дело {case_number} продолжено!\n\n"
@@ -2828,14 +2901,8 @@ async def plaintiff_args(message: types.Message, state: FSMContext):
         return
 
     await db.add_evidence(case_number, message.from_user.id, "plaintiff", "text", message.text, None)
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Завершить аргументы")],
-            [KeyboardButton(text="⏸️ Поставить дело на паузу")],
-            [KeyboardButton(text="🔙 Назад в Меню")]
-        ],
-        resize_keyboard=True
-    )
+
+    kb = await get_role_specific_keyboard(state, message.from_user.id, DisputeState.plaintiff_arguments.state)
 
     await message.answer(
         "📝 Аргумент истца добавлен.\n\n"
@@ -2885,14 +2952,8 @@ async def defendant_args(message: types.Message, state: FSMContext):
     escaped_text = escape_markdown(message.text)
     await db.add_evidence(case_number, message.from_user.id, "defendant", "text", escaped_text, None)
 
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Завершить аргументы")],
-            [KeyboardButton(text="⏸️ Поставить дело на паузу")],
-            [KeyboardButton(text="🔙 Назад в Меню")]
-        ],
-        resize_keyboard=True
-    )
+    # Получаем клавиатуру с учетом роли
+    kb = await get_role_specific_keyboard(state, message.from_user.id, DisputeState.defendant_arguments.state)
 
     notification_text = (
         "📝 Аргумент добавлен.\n\n"
@@ -2970,13 +3031,10 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
         resize_keyboard=True
     )
 
-    # Экранируем первый вопрос для корректного Markdown
-    escaped_question = escape_markdown(ai_questions[0])
-
     notification_text = (
-        f"🤖 *ИИ Судья задает дополнительные вопросы для уточнения*\n\n"
-        f"📝 *{role_text}*, пожалуйста, ответьте на следующий вопрос:\n\n"
-        f"❓ {escaped_question}\n\n"
+        f"🤖 <b>ИИ Судья задает дополнительные вопросы для уточнения</b>\n\n"
+        f"📝 <b>{role_text}</b>, пожалуйста, ответьте на следующий вопрос:\n\n"
+        f"❓ {ai_questions}\n\n"
         f"Вопрос 1 из {len(ai_questions)}"
     )
 
@@ -2984,16 +3042,15 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
         await message.answer(
             notification_text,
             reply_markup=kb,
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
     except TelegramBadRequest as e:
         print(f"Ошибка отправки сообщения: {e}")
         print(f"Текст сообщения: {notification_text}")
-        # Пробуем отправить без Markdown в случае ошибки
         await message.answer(
             notification_text,
             reply_markup=kb,
-            parse_mode=None
+            parse_mode="HTML"
         )
 
 
@@ -3075,14 +3132,10 @@ async def handle_ai_question_response(message: types.Message, state: FSMContext)
         # Есть еще вопросы в этом раунде
         await state.update_data(current_question_index=next_index)
         role_text = "Истец" if answering_role == "plaintiff" else "Ответчик"
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Пропустить вопрос")],
-                [KeyboardButton(text="⏸️ Поставить дело на паузу")],
-                [KeyboardButton(text="🔙 Назад в Меню")]
-            ],
-            resize_keyboard=True
-        )
+
+        # Получаем клавиатуру с учетом роли
+        kb = await get_role_specific_keyboard(state, message.from_user.id,
+                                              DisputeState.waiting_ai_question_response.state)
 
         escaped_question = escape_markdown(current_questions[next_index])
 

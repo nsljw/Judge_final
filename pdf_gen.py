@@ -113,7 +113,7 @@ class PDFGenerator:
         story.append(Spacer(1, 0.3 * cm))
 
         amount = case_data.get('claim_amount', 0)
-        amount_text = f"<b>Сумма иска:</b> {amount:,.0f} USD." if amount else "<b>Сумма иска:</b> Не указана"
+        amount_text = f"<b>Сумма иска:</b> {amount:,.0f} BTC." if amount else "<b>Сумма иска:</b> Не указана"
         story.append(Paragraph(amount_text, self.styles['CustomNormal']))
         story.append(Spacer(1, 0.5 * cm))
 
@@ -172,12 +172,12 @@ class PDFGenerator:
         if verdict.get('claim_satisfied') and awarded > 0:
             if awarded < claim_amount:
                 story.append(Paragraph(
-                    f"1. Удовлетворить иск частично, взыскать {awarded:,.0f} USD.",
+                    f"1. Удовлетворить иск частично, взыскать {awarded:,.0f} BTC.",
                     self.styles['CustomBullet']
                 ))
             else:
                 story.append(Paragraph(
-                    f"1. Удовлетворить иск полностью на сумму {awarded:,.0f} USD.",
+                    f"1. Удовлетворить иск полностью на сумму {awarded:,.0f} BTC.",
                     self.styles['CustomBullet']
                 ))
         else:
