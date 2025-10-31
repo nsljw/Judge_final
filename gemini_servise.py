@@ -1,13 +1,15 @@
-import google.generativeai as genai
-from typing import List, Dict, Union
-import json
 import base64
 import io
+import json
+from typing import List, Dict, Union
+
+import PyPDF2
+import google.generativeai as genai
 from aiogram import Bot
 from aiogram.types import File
-from conf import settings
-import PyPDF2
 from docx import Document
+
+from conf import settings
 
 
 class GeminiService:

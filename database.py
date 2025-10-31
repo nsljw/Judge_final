@@ -84,15 +84,6 @@ class Database:
     async def create_additional_tables(self):
         """Создание дополнительных таблиц для пользовательских сессий и групп"""
         async with self.pool.acquire() as conn:
-            # Таблица для сессий
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    id SERIAL PRIMARY KEY,
-                    session_string TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
-                )
-            ''')
 
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS dispute_groups (
