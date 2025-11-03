@@ -167,17 +167,29 @@ class PDFGenerator:
         story.append(Paragraph("ПОСТАНОВИЛ:", self.styles['CustomHeading']))
         verdict = decision.get('verdict', {})
         claim_amount = case_data.get('claim_amount', 0)
-        awarded = verdict.get('awarded') or 0
+        awarded = verdict.get('amount_awarded') or 0
+        winner = decision.get('winner', 'defendant')
+
+        # Определяем победителя для отображения
+        if winner == "plaintiff":
+            winner_text = "Решение вынесено в пользу ИСТЦА"
+        elif winner == "defendant":
+            winner_text = "Решение вынесено в пользу ОТВЕТЧИКА"
+        else:
+            winner_text = "Вынесено компромиссное решение"
+
+        story.append(Paragraph(f"<b>{winner_text}</b>", self.styles['CustomNormal']))
+        story.append(Spacer(1, 0.3 * cm))
 
         if verdict.get('claim_satisfied') and awarded > 0:
             if awarded < claim_amount:
                 story.append(Paragraph(
-                    f"1. Удовлетворить иск частично, взыскать {awarded:,.0f} BTC.",
+                    f"1. Удовлетворить иск частично, взыскать {awarded:,.8f} BTC.",
                     self.styles['CustomBullet']
                 ))
             else:
                 story.append(Paragraph(
-                    f"1. Удовлетворить иск полностью на сумму {awarded:,.0f} BTC.",
+                    f"1. Удовлетворить иск полностью на сумму {awarded:,.8f} BTC.",
                     self.styles['CustomBullet']
                 ))
         else:

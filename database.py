@@ -80,6 +80,25 @@ class Database:
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS participant_stages (
+                    case_number VARCHAR(50),
+                    user_id BIGINT,
+                    stage VARCHAR(50),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (case_number, user_id)
+                )
+            ''')
+            await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS verdict_files (
+                            id SERIAL PRIMARY KEY,
+                            case_number VARCHAR(50),
+                            filename TEXT NOT NULL,
+                            filepath TEXT NOT NULL,
+                            uploaded_at TIMESTAMP DEFAULT NOW(),
+                            created_at TIMESTAMP DEFAULT NOW()
+                        );
+                    """)
 
     async def create_additional_tables(self):
         """Создание дополнительных таблиц для пользовательских сессий и групп"""
@@ -155,6 +174,73 @@ class Database:
                 ON CONFLICT DO NOTHING
             ''', case_id, plaintiff_id, plaintiff_username)
             return case_number
+
+    async def update_participant_stage(self, case_number: str, user_id: int, stage: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO participant_stages (case_number, user_id, stage, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (case_number, user_id)
+                DO UPDATE SET 
+                    stage = EXCLUDED.stage,
+                    updated_at = NOW()
+            """, case_number, user_id, stage)
+
+    async def save_verdict_file(self, case_number: str, filepath: str):
+        async with self.pool.acquire() as conn:
+            # Сначала пробуем обновить существующую запись
+            result = await conn.execute("""
+                UPDATE verdict_files
+                SET filepath = $2
+                WHERE case_number = $1
+            """, case_number, filepath)
+
+            # Если ни одна строка не обновлена — вставляем новую
+            if result == "UPDATE 0":
+                await conn.execute("""
+                    INSERT INTO verdict_files (case_number, filepath)
+                    VALUES ($1, $2)
+                """, case_number, filepath)
+
+    async def get_verdict_file(self, case_number: str):
+        """Получить путь к файлу вердикта"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT filepath FROM verdict_files WHERE case_number=$1",
+                case_number
+            )
+            return row["filepath"] if row else None
+
+    # -----------------------------
+    # Получить стадию участника
+    # -----------------------------
+    async def get_participant_stage(self, case_number: str, user_id: int) -> str | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT stage FROM participant_stages
+                WHERE case_number = $1 AND user_id = $2
+            """, case_number, user_id)
+            return row["stage"] if row else None
+
+    # -----------------------------
+    # Сброс стадий всех участников
+    # -----------------------------
+    async def reset_participant_stages(self, case_number: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                DELETE FROM participant_stages WHERE case_number = $1
+            """, case_number)
+
+    # -----------------------------
+    # Получить стадии всех участников
+    # -----------------------------
+    async def get_all_participant_stages(self, case_number: str) -> dict[int, str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT user_id, stage FROM participant_stages
+                WHERE case_number = $1
+            """, case_number)
+            return {row["user_id"]: row["stage"] for row in rows}
 
     async def save_bot_user(self, user_id: int, username: str):
         """Сохранить пользователя, написавшего боту"""

@@ -158,11 +158,18 @@ class GeminiService:
       "decision": "Текст итогового решения",
       "verdict": {
           "claim_satisfied": true/false,
-          "amount_awarded": число,
+          "amount_awarded": число (сумма, которая присуждается истцу),
           "court_costs": число
       },
+      "winner": "plaintiff" или "defendant" или "draw",
       "reasoning": "Подробное обоснование решения (текст)"
-    }"""
+    }
+
+    ВАЖНО про поле "winner":
+    - "plaintiff" - если решение вынесено в пользу истца (иск удовлетворен полностью или частично)
+    - "defendant" - если решение вынесено в пользу ответчика (в иске отказано)
+    - "draw" - если обе стороны частично правы (компромиссное решение)
+    """
 
         messages = await self._build_multimodal_prompt(
             instruction, case_data, participants, evidence, bot
@@ -170,7 +177,14 @@ class GeminiService:
 
         try:
             response = self.model.generate_content(messages)
-            return self._parse_analysis_response(response.text)
+            decision_data = self._parse_analysis_response(response.text)
+
+            # ВАЖНО: Определяем победителя если ИИ не указал
+            if 'winner' not in decision_data or not decision_data['winner']:
+                decision_data['winner'] = self._determine_winner(decision_data)
+
+            return decision_data
+
         except Exception as e:
             return {
                 "error": f"Ошибка генерации решения: {str(e)}",
@@ -182,8 +196,30 @@ class GeminiService:
                     "amount_awarded": 0,
                     "court_costs": 0
                 },
+                "winner": "defendant",  # По умолчанию при ошибке
                 "reasoning": ""
             }
+
+    def _determine_winner(self, decision_data: Dict) -> str:
+        """
+        Определяет победителя на основе данных решения
+        Используется как fallback если ИИ не указал winner
+        """
+        verdict = decision_data.get('verdict', {})
+        claim_satisfied = verdict.get('claim_satisfied', False)
+        amount_awarded = verdict.get('amount_awarded', 0)
+
+        # Если иск удовлетворен и присуждена сумма
+        if claim_satisfied and amount_awarded > 0:
+            return "plaintiff"
+
+        # Если иск удовлетворен но суммы нет (неденежное требование)
+        elif claim_satisfied:
+            return "plaintiff"
+
+        # Если иск не удовлетворен
+        else:
+            return "defendant"
 
     async def _download_telegram_file(self, bot: Bot, file_id: str) -> bytes:
         """Загружает файл из Telegram по file_id"""

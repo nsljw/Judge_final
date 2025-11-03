@@ -4,6 +4,7 @@ from aiogram import Router, types, F, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -38,6 +39,7 @@ class DisputeState(StatesGroup):
     defendant_arguments = State()
     ai_asking_questions = State()
     waiting_ai_question_response = State()
+    ai_asking_questions = State()
     finished = State()
     case_paused = State()
 
@@ -607,9 +609,9 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
         return
 
     # Проверяем, что это не истец
-    if callback.from_user.id == case["plaintiff_id"]:
-        await callback.answer("⚠️ Вы не можете быть ответчиком в собственном деле", show_alert=True)
-        return
+    # if callback.from_user.id == case["plaintiff_id"]:
+    #     await callback.answer("⚠️ Вы не можете быть ответчиком в собственном деле", show_alert=True)
+    #     return
 
     # Сохраняем ответчика
     await db.set_defendant(
@@ -644,13 +646,11 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
     await db.update_case_stage(case_number, "plaintiff_arguments")
 
     # Отправляем меню ответчику
-    kb = get_main_menu_keyboard()
     await callback.message.answer(
         f"📋 Дело #{case_number}\n"
         f"📝 Тема: {case['topic']}\n\n"
         f"⏳ Сейчас этап аргументов истца.\n"
-        f"Вы получите уведомление, когда настанет ваша очередь.",
-        reply_markup=kb
+        f"Вы получите уведомление, когда настанет ваша очередь."
     )
 
     # Уведомляем истца о начале аргументации
@@ -936,7 +936,7 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
     data = await state.get_data()
     ai_round = data.get(f"ai_round_{role}", 0)
 
-    if ai_round >= 2:  # Максимум 2 раунда вопросов
+    if ai_round >= 3:  # Максимум 2 раунда вопросов
         # Если это был ответчик - переходим к вердикту
         if role == "defendant":
             await generate_final_verdict(message, state, case_number)
@@ -993,13 +993,14 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
         )
     )
 
-    await target_state.set_state(DisputeState.waiting_ai_question_response)
+    await target_state.set_state(DisputeState.ai_asking_questions)
     await target_state.update_data(
         case_number=case_number,
         ai_questions=ai_questions,
         current_question_index=0,
         answering_role=role,
-        ai_round=ai_round + 1
+        ai_round=ai_round + 1,
+        skip_count=0
     )
 
     kb = ReplyKeyboardMarkup(
@@ -1024,7 +1025,6 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
         )
     except:
         pass
-
     # Уведомление в группу
     if case.get("chat_id"):
         try:
@@ -1035,6 +1035,104 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
             )
         except:
             pass
+
+
+@router.message(DisputeState.ai_asking_questions)
+async def handle_ai_question_response(message: types.Message, state: FSMContext):
+    """Обработка ответов на вопросы ИИ (универсальный обработчик)"""
+    if message.text == "🔙 Назад в Меню":
+        await return_to_main_menu(message, state)
+        return
+
+    data = await state.get_data()
+    case_number = data.get("case_number")
+    ai_questions = data.get("ai_questions", [])
+    current_index = data.get("current_question_index", 0)
+    answering_role = data.get("answering_role")
+    ai_round = data.get("ai_round", 1)
+    skip_count = data.get("skip_count", 0)
+
+    if not ai_questions or current_index >= len(ai_questions):
+        await message.answer("⚠️ Ошибка: вопросы не найдены.")
+        await state.clear()
+        return
+
+    # Обработка пропуска
+    if message.text == "⏭️ Пропустить вопрос":
+        skip_count += 1
+        await state.update_data(skip_count=skip_count)
+
+        if skip_count >= 3:
+            await message.answer("⚠️ Слишком много пропусков. Переходим дальше.")
+            await finish_ai_questions(message, state, case_number, answering_role)
+            return
+    else:
+        # Сохраняем ответ
+        question_text = ai_questions[current_index]
+        response_text = f"Вопрос ИИ: {question_text}\nОтвет: {message.text}"
+
+        await db.add_evidence(
+            case_number,
+            message.from_user.id,
+            answering_role,
+            "ai_response",
+            response_text,
+            None
+        )
+
+        await db.save_ai_answer(
+            case_number,
+            question_text,
+            message.text,
+            answering_role,
+            ai_round
+        )
+        skip_count = 0
+
+    # Переход к следующему вопросу
+    next_index = current_index + 1
+    await state.update_data(current_question_index=next_index, skip_count=skip_count)
+
+    if next_index < len(ai_questions):
+        role_text = "Истец" if answering_role == "plaintiff" else "Ответчик"
+        await message.answer(
+            f"✅ Ответ принят.\n\n"
+            f"📝 *{role_text}*, следующий вопрос:\n\n"
+            f"❓ {ai_questions[next_index]}\n\n"
+            f"Вопрос {next_index + 1} из {len(ai_questions)}",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("✅ Все вопросы отвечены!")
+        await finish_ai_questions(message, state, case_number, answering_role)
+
+
+async def finish_ai_questions(message: types.Message, state: FSMContext, case_number: str, answering_role: str):
+    """Завершение раунда вопросов ИИ"""
+    data = await state.get_data()
+    ai_round = data.get("ai_round", 1)
+
+    # Сохраняем раунд
+    case = await db.get_case_by_number(case_number)
+    plaintiff_state = FSMContext(
+        storage=state.storage,
+        key=StorageKey(bot_id=(await message.bot.get_me()).id, chat_id=case["plaintiff_id"], user_id=case["plaintiff_id"])
+    )
+    defendant_state = FSMContext(
+        storage=state.storage,
+        key=StorageKey(bot_id=(await message.bot.get_me()).id, chat_id=case["defendant_id"], user_id=case["defendant_id"])
+    )
+
+    if answering_role == "plaintiff":
+        await plaintiff_state.update_data(ai_round_plaintiff=ai_round)
+        # Переход к ответчику
+        await check_and_ask_ai_questions(message, defendant_state, case_number, "defendant")
+    else:
+        await defendant_state.update_data(ai_round_defendant=ai_round)
+        # Финальный вердикт
+        await generate_final_verdict(message, state, case_number)
+
+    await state.clear()
 
 
 @router.message(DisputeState.waiting_ai_question_response)
@@ -1122,12 +1220,21 @@ async def handle_ai_question_response(message: types.Message, state: FSMContext)
 # ФИНАЛЬНЫЙ ВЕРДИКТ
 # =============================================================================
 
+# =============================================================================
+# ФАЙЛ: handlers.py
+# ЗАМЕНИТЕ функцию generate_final_verdict
+# =============================================================================
+
 async def generate_final_verdict(message: types.Message, state: FSMContext, case_number: str):
     """Генерация финального вердикта"""
     await db.update_case_stage(case_number, "final_decision")
     await db.update_case_status(case_number, "finished")
 
     case = await db.get_case_by_number(case_number)
+    if not case:
+        await message.answer("Ошибка: дело не найдено.")
+        return
+
     participants = await db.list_participants(case["id"])
     evidence = await db.get_case_evidence(case_number)
 
@@ -1145,84 +1252,165 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
         for e in evidence
     ]
 
-    await message.answer("⚖️ *ИИ-судья анализирует дело и выносит решение...*", parse_mode="Markdown")
+    # Уведомляем о начале анализа
+    plaintiff_id = case["plaintiff_id"]
+    defendant_id = case.get("defendant_id")
 
-    # Генерируем решение
-    decision = await gemini_service.generate_full_decision(
-        case, participants_info, evidence_info, bot=message.bot
-    )
-
-    # Генерируем PDF
-    pdf_bytes = pdf_generator.generate_verdict_pdf(case, decision, participants_info, evidence_info)
-
-    filepath = f"verdict_{case_number}.pdf"
-    with open(filepath, "wb") as f:
-        f.write(pdf_bytes)
-
-    await db.save_decision(case_number=case_number, file_path=filepath)
-
-    # Отправляем истцу
-    kb = get_main_menu_keyboard()
-    await message.answer(
-        "⚖️ *Суд завершён!*\n\n"
-        "Вот итоговый вердикт:",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-    await message.answer_document(FSInputFile(filepath))
-
-    # Отправляем ответчику
     try:
         await message.bot.send_message(
-            case["defendant_id"],
+            plaintiff_id,
+            "⚖️ *ИИ-судья анализирует дело и выносит решение...*",
+            parse_mode="Markdown"
+        )
+    except:
+        pass
+
+    if defendant_id:
+        try:
+            await message.bot.send_message(
+                defendant_id,
+                "⚖️ *ИИ-судья анализирует дело и выносит решение...*",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+
+    # Генерируем решение
+    try:
+        decision = await gemini_service.generate_full_decision(
+            case, participants_info, evidence_info, bot=message.bot
+        )
+        if not decision:
+            decision = {
+                "decision": "Решение не было сгенерировано.",
+                "winner": "defendant",
+                "verdict": {"claim_satisfied": False, "amount_awarded": 0},
+                "reasoning": ""
+            }
+    except Exception as e:
+        print(f"Ошибка генерации решения: {e}")
+        decision = {
+            "decision": "Техническая ошибка при вынесении решения.",
+            "winner": "defendant",
+            "verdict": {"claim_satisfied": False, "amount_awarded": 0},
+            "reasoning": ""
+        }
+
+    # Генерируем PDF
+    try:
+        pdf_bytes = pdf_generator.generate_verdict_pdf(case, decision, participants_info, evidence_info)
+        filepath = f"verdict_{case_number}.pdf"
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
+        await db.save_decision(case_number=case_number, file_path=filepath)
+    except Exception as e:
+        print(f"Ошибка генерации PDF: {e}")
+        filepath = None
+
+    kb = get_main_menu_keyboard()
+
+    # === ОТПРАВКА ИСТЦУ ===
+    try:
+        await message.bot.send_message(
+            plaintiff_id,
             "⚖️ *Суд завершён!*\n\n"
             "Вот итоговый вердикт:",
             reply_markup=kb,
             parse_mode="Markdown"
         )
-        await message.bot.send_document(
-            case["defendant_id"],
-            FSInputFile(filepath)
-        )
-    except:
-        pass
+        if filepath:
+            await message.bot.send_document(plaintiff_id, FSInputFile(filepath))
+    except Exception as e:
+        print(f"Не удалось отправить истцу: {e}")
 
-    # Отправляем краткую информацию в группу
+    # === ОТПРАВКА ОТВЕТЧИКУ ===
+    if defendant_id:
+        try:
+            await message.bot.send_message(
+                defendant_id,
+                "⚖️ *Суд завершён!*\n\n"
+                "Вот итоговый вердикт:",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+            if filepath:
+                await message.bot.send_document(defendant_id, FSInputFile(filepath))
+        except Exception as e:
+            print(f"Не удалось отправить ответчику: {e}")
+
+    # === ОТПРАВКА В ГРУППУ ===
     if case.get("chat_id"):
         try:
-            # Парсим победителя из решения (упрощенно)
-            winner = "не определен"
-            if "в пользу истца" in decision.lower():
-                winner = f"@{case['plaintiff_username']}"
-            elif "в пользу ответчика" in decision.lower():
-                winner = f"@{case.get('defendant_username', 'ответчик')}"
+            # Определяем победителя из решения
+            winner_code = decision.get("winner", "draw")
+
+            # Получаем информацию об участниках
+            plaintiff_username = case['plaintiff_username']
+            defendant_username = case.get('defendant_username', 'неизвестен')
+
+            # Формируем текст победителя
+            if winner_code == "plaintiff":
+                winner_text = f"@{plaintiff_username} (Истец)"
+                winner_emoji = "🏆"
+            elif winner_code == "defendant":
+                winner_text = f"@{defendant_username} (Ответчик)"
+                winner_emoji = "🏆"
+            else:  # draw
+                winner_text = "Компромиссное решение (обе стороны частично правы)"
+                winner_emoji = "⚖️"
+
+            # Информация о суммах
+            verdict = decision.get("verdict", {})
+            amount_awarded = verdict.get("amount_awarded", 0)
+            claim_amount = case.get("claim_amount", 0)
+
+            verdict_details = ""
+            if amount_awarded > 0:
+                if claim_amount and amount_awarded < claim_amount:
+                    verdict_details = f"\n💰 Присуждено: {amount_awarded} BTC (частичное удовлетворение из {claim_amount} BTC)"
+                else:
+                    verdict_details = f"\n💰 Присуждено: {amount_awarded} BTC"
+
+            group_text = (
+                f"⚖️ *ВЕРДИКТ ПО ДЕЛУ #{case_number}*\n\n"
+                f"📋 Тема: {case['topic']}\n"
+                f"👨‍⚖️ Истец: @{plaintiff_username}\n"
+                f"👤 Ответчик: @{defendant_username}\n"
+                f"{verdict_details}\n\n"
+                f"{winner_emoji} *Решение вынесено в пользу:*\n{winner_text}\n\n"
+                f"📄 Полный документ отправлен участникам в личные сообщения."
+            )
 
             await message.bot.send_message(
                 case["chat_id"],
-                f"⚖️ *ВЕРДИКТ ПО ДЕЛУ #{case_number}*\n\n"
-                f"📋 Тема: {case['topic']}\n"
-                f"👨‍⚖️ Истец: @{case['plaintiff_username']}\n"
-                f"👤 Ответчик: @{case.get('defendant_username', 'неизвестен')}\n\n"
-                f"🏆 *Решение вынесено в пользу:* {winner}\n\n"
-                f"📄 Полный документ отправлен участникам в личные сообщения.",
+                group_text,
                 parse_mode="Markdown"
             )
 
             # Отправляем PDF в группу
-            await message.bot.send_document(
-                case["chat_id"],
-                FSInputFile(filepath),
-                caption=f"📄 Полный вердикт по делу #{case_number}"
-            )
+            if filepath:
+                await message.bot.send_document(
+                    case["chat_id"],
+                    FSInputFile(filepath),
+                    caption=f"📄 Полный вердикт по делу #{case_number}"
+                )
         except Exception as e:
             print(f"Ошибка отправки в группу: {e}")
 
-    # Удаляем временный файл
-    try:
-        os.remove(filepath)
-    except:
-        pass
+    # === УДАЛЕНИЕ ВРЕМЕННОГО ФАЙЛА ===
+    if filepath:
+        try:
+            os.remove(filepath)
+        except:
+            pass
 
+    # === СООБЩЕНИЕ ИНИЦИАТОРУ ===
+    await message.answer(
+        "✅ Вердикт успешно вынесен и отправлен всем участникам!",
+        reply_markup=kb
+    )
+
+    # Очищаем состояние
     await state.clear()
 
 
