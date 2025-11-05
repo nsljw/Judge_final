@@ -1,6 +1,7 @@
 import os
 
 from aiogram import Router, types, F, Dispatcher
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -39,7 +40,6 @@ class DisputeState(StatesGroup):
     defendant_arguments = State()
     ai_asking_questions = State()
     waiting_ai_question_response = State()
-    ai_asking_questions = State()
     finished = State()
     case_paused = State()
 
@@ -216,10 +216,11 @@ async def start_dispute_pm(message: types.Message, state: FSMContext):
         await state.set_state(DisputeState.waiting_start_mode)
         await message.answer(
             "Выберите режим работы:\n\n"
-            "📱 *Без группы* - весь процесс только в ЛС\n"
-            "👥 *С группой* - результат будет отправлен в группу",
+            "📱 <b> Без группы </b> - весь процесс только в ЛС\n"
+            "👥 <b> С группой </b> - результат будет отправлен в группу",
             reply_markup=kb,
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
+
         )
 
 
@@ -292,10 +293,10 @@ async def select_category(message: types.Message, state: FSMContext):
     await state.set_state(DisputeState.waiting_claim_reason)
     kb = get_back_to_menu_keyboard()
     await message.answer(
-        "📝 *Опишите вашу претензию к ответчику*\n\n"
+        "📝 <b> Опишите вашу претензию к ответчику </b>\n\n"
         "Подробно изложите суть спора и ваши требования:",
         reply_markup=kb,
-        parse_mode="Markdown"
+        parse_mode=ParseMode.HTML
     )
 
 
@@ -386,10 +387,10 @@ async def proceed_to_message_history(message: types.Message, state: FSMContext):
 
     await state.set_state(DisputeState.waiting_message_history)
     await message.answer(
-        "📱 *Хотите добавить переписку как доказательство?*\n\n"
+        "📱 <b>Хотите добавить переписку как доказательство?</b>\n\n"
         "Вы можете переслать сюда сообщения из вашего спора.",
         reply_markup=kb,
-        parse_mode="Markdown"
+        parse_mode=ParseMode.HTML
     )
 
 
@@ -410,10 +411,10 @@ async def handle_message_history_choice(message: types.Message, state: FSMContex
         )
         await state.set_state(DisputeState.waiting_forwarded_messages)
         await message.answer(
-            "📨 *Перешлите сюда сообщения из переписки*\n\n"
+            "📨 <b>Перешлите сюда сообщения из переписки</b>\n\n"
             "После завершения нажмите «✅ Завершить добавление».",
             reply_markup=kb,
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
         )
 
     elif message.text == "⏭️ Пропустить":
@@ -509,19 +510,19 @@ async def proceed_to_defendant_selection(message: types.Message, state: FSMConte
 
     await state.set_state(DisputeState.waiting_defendant_username)
     await message.answer(
-        f"✅ *Дело #{case_number} создано!*\n\n"
+        f"✅ <b>Дело #{case_number} создано!</b>\n\n"
         f"📝 Тема: {data['topic']}\n"
         f"📂 Категория: {data['category']}\n"
         f"💰 Сумма иска: {data.get('claim_amount', 'не указана')}\n\n"
         f"👤 Введите username ответчика (например: @username или username):",
         reply_markup=kb,
-        parse_mode="Markdown"
+        parse_mode=ParseMode.HTML
     )
 
 
 @router.message(DisputeState.waiting_defendant_username)
 async def input_defendant_username(message: types.Message, state: FSMContext):
-    """Ввод username ответчика"""
+    """Ввод username ответчика с проверкой в БД"""
     if message.text == "🔙 Назад в Меню":
         await return_to_main_menu(message, state)
         return
@@ -537,29 +538,93 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
     data = await state.get_data()
     case_number = data.get("case_number")
 
-    # Пытаемся найти пользователя через username
     try:
-        # Здесь можно добавить проверку существования пользователя
-        # Пока просто сохраняем username
-        await state.update_data(defendant_username=username)
+        # Проверяем, есть ли пользователь в базе данных
+        defendant_user = await db.get_user_by_username(username)
 
         bot_username = (await message.bot.get_me()).username
         invite_link = f"https://t.me/{bot_username}?start=defendant_{case_number}"
 
-        kb_copy = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="📋 Скопировать ссылку",
-                url=invite_link
-            )]
-        ])
+        if defendant_user:
+            # Пользователь найден в БД - отправляем приглашение напрямую
+            defendant_id = defendant_user['user_id']
 
-        await message.answer(
-            f"📨 Отправьте эту ссылку ответчику @{username}:\n\n"
-            f"`{invite_link}`\n\n"
-            f"Когда ответчик примет участие, вы получите уведомление.",
-            reply_markup=kb_copy,
-            parse_mode="Markdown"
-        )
+            await state.update_data(defendant_username=username)
+
+            # Создаем клавиатуру для ответчика
+            kb_defendant = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Принять участие в деле",
+                    callback_data=f"accept_defendant:{case_number}"
+                )],
+                [InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"reject_defendant:{case_number}"
+                )]
+            ])
+
+            # Отправляем приглашение ответчику
+            try:
+                await message.bot.send_message(
+                    defendant_id,
+                    f"⚖️ <b>Приглашение в судебное дело</b>\n\n"
+                    f"📋 Дело #{case_number}\n"
+                    f"📝 Тема: {data['topic']}\n"
+                    f"📂 Категория: {data['category']}\n"
+                    f"💰 Сумма иска: {data.get('claim_amount', 'не указана')}\n\n"
+                    f"👨‍⚖️ Истец: @{message.from_user.username or message.from_user.full_name}\n\n"
+                    f"Вас пригласили участвовать в деле в качестве ответчика.\n"
+                    f"Примите или отклоните участие:",
+                    reply_markup=kb_defendant,
+                    parse_mode=ParseMode.HTML
+                )
+
+                # Уведомляем истца об успешной отправке
+                await message.answer(
+                    f"✅ <b>Приглашение отправлено!</b>\n\n"
+                    f"👤 Ответчик: @{username}\n"
+                    f"📨 Приглашение доставлено напрямую.\n\n"
+                    f"⏳ Ожидаем ответа от ответчика...",
+                    parse_mode=ParseMode.HTML
+                )
+
+            except Exception as e:
+                # Если не удалось отправить (например, пользователь заблокировал бота)
+                kb_copy = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="📋 Скопировать ссылку",
+                        url=invite_link
+                    )]
+                ])
+
+                await message.answer(
+                    f"⚠️ Не удалось отправить приглашение @{username} напрямую.\n\n"
+                    f"Возможно, пользователь заблокировал бота или не начинал диалог.\n\n"
+                    f"📨 Отправьте эту ссылку ответчику вручную:\n\n"
+                    f"<code>{invite_link}</code>",
+                    reply_markup=kb_copy,
+                    parse_mode=ParseMode.HTML
+                )
+        else:
+            # Пользователь не найден в БД - высылаем ссылку истцу
+            await state.update_data(defendant_username=username)
+
+            kb_copy = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="📋 Скопировать ссылку",
+                    url=invite_link
+                )]
+            ])
+
+            await message.answer(
+                f"ℹ️ <b>Пользователь @{username} не найден в базе данных</b>\n\n"
+                f"Это означает, что он еще не взаимодействовал с ботом.\n\n"
+                f"📨 Отправьте эту ссылку ответчику @{username}:\n\n"
+                f"<code>{invite_link}</code>\n\n"
+                f"Когда ответчик примет участие, вы получите уведомление.",
+                reply_markup=kb_copy,
+                parse_mode=ParseMode.HTML
+            )
 
         # Уведомление в группу (если есть)
         chat_id = data.get("chat_id")
@@ -609,9 +674,9 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
         return
 
     # Проверяем, что это не истец
-    # if callback.from_user.id == case["plaintiff_id"]:
-    #     await callback.answer("⚠️ Вы не можете быть ответчиком в собственном деле", show_alert=True)
-    #     return
+    if callback.from_user.id == case["plaintiff_id"]:
+        await callback.answer("⚠️ Вы не можете быть ответчиком в собственном деле", show_alert=True)
+        return
 
     # Сохраняем ответчика
     await db.set_defendant(
@@ -679,14 +744,14 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.bot.send_message(
             case["plaintiff_id"],
-            "📝 *Представьте ваши аргументы*\n\n"
+            "📝 <b>Представьте ваши аргументы</b>\n\n"
             "Вы можете отправлять:\n"
             "• Текстовые сообщения\n"
             "• Фото и видео\n"
             "• Документы\n\n"
             "После завершения нажмите «✅ Завершить аргументы».",
             reply_markup=kb_plaintiff,
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
         )
     except:
         pass
@@ -770,7 +835,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         try:
             await message.bot.send_message(
                 defendant_id,
-                f"📝 *Дело #{case_number}*\n\n"
+                f"📝 <b>Дело #{case_number}</b>\n\n"
                 f"Настала ваша очередь представить аргументы.\n\n"
                 f"Вы можете отправлять:\n"
                 f"• Текстовые сообщения\n"
@@ -778,7 +843,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
                 f"• Документы\n\n"
                 f"После завершения нажмите «✅ Завершить аргументы».",
                 reply_markup=kb_defendant,
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
         except Exception as e:
             await message.answer(f"⚠️ Не удалось уведомить ответчика: {e}")
@@ -1016,12 +1081,12 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
     try:
         await message.bot.send_message(
             target_user_id,
-            f"🤖 *ИИ-судья задает уточняющие вопросы*\n\n"
-            f"📝 *{role_text}*, ответьте на вопрос:\n\n"
+            f"🤖 <b>ИИ-судья задает уточняющие вопросы</b>\n\n"
+            f"📝 <b>{role_text}</b>, ответьте на вопрос:\n\n"
             f"❓ {ai_questions[0]}\n\n"
             f"Вопрос 1 из {len(ai_questions)}",
             reply_markup=kb,
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
         )
     except:
         pass
@@ -1097,10 +1162,10 @@ async def handle_ai_question_response(message: types.Message, state: FSMContext)
         role_text = "Истец" if answering_role == "plaintiff" else "Ответчик"
         await message.answer(
             f"✅ Ответ принят.\n\n"
-            f"📝 *{role_text}*, следующий вопрос:\n\n"
+            f"📝 <b>{role_text}</b>, следующий вопрос:\n\n"
             f"❓ {ai_questions[next_index]}\n\n"
             f"Вопрос {next_index + 1} из {len(ai_questions)}",
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
         )
     else:
         await message.answer("✅ Все вопросы отвечены!")
@@ -1197,10 +1262,10 @@ async def handle_ai_question_response(message: types.Message, state: FSMContext)
 
         await message.answer(
             f"✅ Ответ принят.\n\n"
-            f"📝 *{role_text}*, следующий вопрос:\n\n"
+            f"📝 <b>{role_text}</b>, следующий вопрос:\n\n"
             f"❓ {ai_questions[next_index]}\n\n"
             f"Вопрос {next_index + 1} из {len(ai_questions)}",
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
         )
     else:
         await message.answer("✅ Спасибо за ответы!")
@@ -1259,8 +1324,8 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
     try:
         await message.bot.send_message(
             plaintiff_id,
-            "⚖️ *ИИ-судья анализирует дело и выносит решение...*",
-            parse_mode="Markdown"
+            "⚖️ <b>ИИ-судья анализирует дело и выносит решение...</b>",
+            parse_mode=ParseMode.HTML
         )
     except:
         pass
@@ -1269,8 +1334,8 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
         try:
             await message.bot.send_message(
                 defendant_id,
-                "⚖️ *ИИ-судья анализирует дело и выносит решение...*",
-                parse_mode="Markdown"
+                "⚖️ <b>ИИ-судья анализирует дело и выносит решение...</b>",
+                parse_mode=ParseMode.HTML
             )
         except:
             pass
@@ -1313,10 +1378,10 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
     try:
         await message.bot.send_message(
             plaintiff_id,
-            "⚖️ *Суд завершён!*\n\n"
+            "⚖️ <b>Суд завершён!</b>\n\n"
             "Вот итоговый вердикт:",
             reply_markup=kb,
-            parse_mode="Markdown"
+            parse_mode=ParseMode.HTML
         )
         if filepath:
             await message.bot.send_document(plaintiff_id, FSInputFile(filepath))
@@ -1328,10 +1393,10 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
         try:
             await message.bot.send_message(
                 defendant_id,
-                "⚖️ *Суд завершён!*\n\n"
+                "⚖️ <b>Суд завершён!</b>\n\n"
                 "Вот итоговый вердикт:",
                 reply_markup=kb,
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
             if filepath:
                 await message.bot.send_document(defendant_id, FSInputFile(filepath))
@@ -1372,19 +1437,19 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
                     verdict_details = f"\n💰 Присуждено: {amount_awarded} BTC"
 
             group_text = (
-                f"⚖️ *ВЕРДИКТ ПО ДЕЛУ #{case_number}*\n\n"
+                f"⚖️ <b>ВЕРДИКТ ПО ДЕЛУ #{case_number}</b>\n\n"
                 f"📋 Тема: {case['topic']}\n"
                 f"👨‍⚖️ Истец: @{plaintiff_username}\n"
                 f"👤 Ответчик: @{defendant_username}\n"
                 f"{verdict_details}\n\n"
-                f"{winner_emoji} *Решение вынесено в пользу:*\n{winner_text}\n\n"
+                f"{winner_emoji} <b>Решение вынесено в пользу:</b>\n{winner_text}\n\n"
                 f"📄 Полный документ отправлен участникам в личные сообщения."
             )
 
             await message.bot.send_message(
                 case["chat_id"],
                 group_text,
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
 
             # Отправляем PDF в группу
@@ -1423,8 +1488,8 @@ async def help_command(message: types.Message):
     """Справка"""
     kb = get_back_to_menu_keyboard()
     await message.answer(
-        "📖 *Справка по использованию ИИ-судьи:*\n\n"
-        "*Процесс работы:*\n"
+        "📖 <b>Справка по использованию ИИ-судьи:</b>\n\n"
+        "<b>Процесс работы:</b>\n"
         "1️⃣ Нажмите «⚖️ Начать Дело»\n"
         "2️⃣ Выберите: с группой или без\n"
         "3️⃣ Введите информацию о споре\n"
@@ -1432,15 +1497,15 @@ async def help_command(message: types.Message):
         "5️⃣ Представьте аргументы\n"
         "6️⃣ Ответьте на вопросы ИИ-судьи\n"
         "7️⃣ Получите вердикт\n\n"
-        "*Особенности:*\n"
+        "<b>Особенности:</b>\n"
         "• Весь процесс проходит в личных сообщениях\n"
         "• Если выбрана группа - туда отправляется только итоговый вердикт\n"
         "• Можно работать полностью без группы\n\n"
-        "*Доказательства:*\n"
+        "<b>Доказательства:</b>\n"
         "• Текстовые сообщения\n"
         "• Пересланные сообщения\n"
         "• Фото, видео, документы",
-        parse_mode="Markdown",
+        parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
 
@@ -1459,7 +1524,7 @@ async def my_cases(message: types.Message, state: FSMContext):
     page = 0
     text, total = await build_cases_text(user_cases, user_id, page)
     keyboard = build_pagination_keyboard(page, total)
-    await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 async def build_cases_text(user_cases, user_id, page: int):
@@ -1470,13 +1535,13 @@ async def build_cases_text(user_cases, user_id, page: int):
     user_cases = list(reversed(user_cases))
     page_cases = user_cases[start:end]
 
-    text = "📂 *Ваши дела:*\n\n"
+    text = "📂 <b>Ваши дела:</b>\n\n"
     for case in page_cases:
         role = "Истец" if case["plaintiff_id"] == user_id else "Ответчик"
         status = "⚖️ В процессе" if case["status"] != "finished" else "✅ Завершено"
         claim_text = f" ({case['claim_amount']} BTC)" if case.get("claim_amount") else ""
         text += (
-            f"📌 *Дело {case['case_number']}*\n"
+            f"📌 <b>Дело {case['case_number']}</b>\n"
             f"Тема: {case['topic']}{claim_text}\n"
             f"Категория: {case['category']}\n"
             f"Ваша роль: {role}\n"
@@ -1514,7 +1579,7 @@ async def paginate_cases(callback: CallbackQuery):
     text, total = await build_cases_text(user_cases, user_id, page)
     keyboard = build_pagination_keyboard(page, total)
 
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -1702,10 +1767,10 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
     )
 
     await message.answer(
-        f"⏸️ *Дело #{case_number} поставлено на паузу*\n\n"
+        f"⏸️ <b>Дело #{case_number} поставлено на паузу</b>\n\n"
         f"Для продолжения нажмите «▶️ Продолжить дело»",
         reply_markup=kb,
-        parse_mode="Markdown"
+        parse_mode=ParseMode.HTML
     )
 
     # Уведомляем ответчика

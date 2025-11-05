@@ -27,41 +27,41 @@ class GeminiService:
             bot: Bot = None
     ) -> List[str]:
         """
-        Генерирует уточняющие вопросы для участника дела
+        Generates clarifying questions for a case participant
         """
-        role_text = "истца" if current_role == "plaintiff" else "ответчика"
+        role_text = "plaintiff" if current_role == "plaintiff" else "defendant"
 
         instruction = f"""
-        Ты — ИИ судья. Твоя задача — анализировать аргументы и доказательства {"истца" if current_role == "plaintiff" else "ответчика"} 
-        и задавать уточняющие вопросы, которые помогут раскрыть детали и устранить пробелы. Определи, нужны ли дополнительные 
-        вопросы для полного понимания позиции. Включи вопросы об наличии вещественных доказательствах
+        You are an AI judge. Your task is to analyze the arguments and evidence of the {"plaintiff" if current_role == "plaintiff" else "defendant"} 
+        and ask clarifying questions that will help reveal details and eliminate gaps. Determine if additional 
+        questions are needed for a complete understanding of the position. Include questions about the availability of material evidence.
 
-        ВАЖНО: 
-        - Это раунд {round_number} из максимум 3 возможных
-        - Задавай только те вопросы, которые помогают глубже понять факты дела
-        - Избегай слишком общих или философских вопросов (например, "Почему вы считаете себя правым?")
-        - Максимум 3 вопроса за раз
-        - Если информации достаточно для вынесения решения, верни пустой массив []
+        IMPORTANT: 
+        - This is round {round_number} out of a maximum of 3 possible rounds
+        - Ask only those questions that help understand the facts of the case more deeply
+        - Avoid overly general or philosophical questions (e.g., "Why do you think you're right?")
+        - Maximum 3 questions at a time
+        - If there is sufficient information to make a decision, return an empty array []
 
-        Критерии для вопросов:
-        1. Конкретизация деталей (точные даты, суммы, места, участники, действия).
-        2. Проверка обоснованности доказательств (например: "Какие документы подтверждают это?", "Есть ли свидетели?").
-        3. Уточнение взаимосвязей между событиями и доказательствами.
-        4. Выявление слабых мест или противоречий в позиции {"истца" if current_role == "plaintiff" else "ответчика"}.
-        5. Фокус на фактах, которые напрямую влияют на исход дела (а не на второстепенные детали).
+        Criteria for questions:
+        1. Specification of details (exact dates, amounts, locations, participants, actions).
+        2. Verification of evidence validity (e.g., "What documents confirm this?", "Are there witnesses?").
+        3. Clarification of relationships between events and evidence.
+        4. Identification of weak points or contradictions in the {"plaintiff's" if current_role == "plaintiff" else "defendant's"} position.
+        5. Focus on facts that directly affect the case outcome (not secondary details).
 
-        Примеры стиля вопросов:
-        - "Уточните, в какой день именно произошло событие?"
-        - "Кто присутствовал при заключении договора?"
-        - "Чем подтверждается сумма, которую вы заявляете?"
-        - "Почему в ваших документах указаны разные даты?"
+        Examples of question style:
+        - "Please specify on what exact day the event occurred?"
+        - "Who was present at the signing of the contract?"
+        - "What confirms the amount you are claiming?"
+        - "Why do your documents show different dates?"
 
-        Верни JSON в формате:
+        Return JSON in the format:
         {{
-                "questions": ["вопрос1", "вопрос2", "вопрос3"]
+                "questions": ["question1", "question2", "question3"]
         }}
 
-        Если вопросы не нужны, верни: {{"questions": []}}
+        If no questions are needed, return: {{"questions": []}}
         """
 
         messages = await self._build_multimodal_prompt(
@@ -73,11 +73,11 @@ class GeminiService:
             result = self._parse_questions_response(response.text)
             return result.get("questions", [])
         except Exception as e:
-            print(f"Ошибка генерации вопросов: {e}")
+            print(f"Error generating questions: {e}")
             return []
 
     def _parse_questions_response(self, response_text: str) -> Dict:
-        """Парсит ответ от Gemini с вопросами"""
+        """Parses the response from Gemini with questions"""
         try:
             start = response_text.find('{')
             end = response_text.rfind('}') + 1
@@ -87,16 +87,16 @@ class GeminiService:
             else:
                 return {"questions": []}
         except Exception as e:
-            print(f"Ошибка парсинга вопросов: {e}")
+            print(f"Error parsing questions: {e}")
             return {"questions": []}
 
     async def analyze_case(self, case_data: Dict, participants: List[Dict], evidence: List[Dict],
                            bot: Bot = None) -> Dict:
         """
-        Базовый анализ дела (JSON c фактами, нарушениями, решением).
+        Basic case analysis (JSON with facts, violations, decision).
         """
         messages = await self._build_multimodal_prompt(
-            "Ты — ИИ судья. Проведи анализ дела и верни JSON.",
+            "You are an AI judge. Conduct a case analysis and return JSON.",
             case_data, participants, evidence, bot
         )
         try:
@@ -105,10 +105,10 @@ class GeminiService:
             return analysis
         except Exception as e:
             return {
-                "error": f"Ошибка анализа: {str(e)}",
+                "error": f"Analysis error: {str(e)}",
                 "established_facts": [],
                 "violations": [],
-                "decision": "Невозможно вынести решение из-за технической ошибки",
+                "decision": "Unable to make a decision due to technical error",
                 "verdict": {},
                 "additional_questions": []
             }
@@ -116,17 +116,17 @@ class GeminiService:
     async def generate_reasoning(self, case_data: Dict, participants: List[Dict], evidence: List[Dict],
                                  bot: Bot = None) -> str:
         """
-        Генерация только текста обоснования.
+        Generation of reasoning text only.
         """
         messages = await self._build_multimodal_prompt(
-            "Ты — ИИ судья. Сформулируй только обоснование решения (чистый текст).",
+            "You are an AI judge. Formulate only the reasoning for the decision (plain text).",
             case_data, participants, evidence, bot
         )
         try:
             response = self.model.generate_content(messages)
             return response.text.strip()
         except Exception as e:
-            return f"Не удалось сгенерировать обоснование из-за ошибки: {str(e)}"
+            return f"Failed to generate reasoning due to error: {str(e)}"
 
     async def generate_full_decision(
             self,
@@ -137,38 +137,38 @@ class GeminiService:
             no_evidence: bool = False
     ) -> Dict:
         """
-        Генерация полного постановления и решения (JSON).
+        Generation of full ruling and decision (JSON).
         """
-        instruction = """Ты — ИИ судья. Рассмотри дело и сформируй полное постановление. 
-    Учитывай предоставленные вещественные доказательства, включая изображения и содержимое документов.
+        instruction = """You are an AI judge. Review the case and form a complete ruling. 
+    Consider the provided material evidence, including images and document contents.
 
-    ВАЖНО: 
-    - Обрати особое внимание на ответы участников на вопросы ИИ (тип 'ai_response')
-    - Переписка из чата (тип 'chat_history') также является важным доказательством
-    - Анализируй контекст и хронологию сообщений в переписке"""
+    IMPORTANT: 
+    - Pay special attention to participants' answers to AI questions (type 'ai_response')
+    - Chat correspondence (type 'chat_history') is also important evidence
+    - Analyze the context and chronology of messages in the correspondence"""
 
         if no_evidence:
-            instruction += "\n⚠️ Внимание: доказательства не предоставлены. Решение нужно вынести только на основании аргументов сторон."
+            instruction += "\n⚠️ Attention: no evidence provided. The decision must be made based solely on the parties' arguments."
 
         instruction += """
-    Верни JSON строго в формате:
+    Return JSON strictly in the format:
     {
-      "established_facts": ["факт1", "факт2"],
-      "violations": ["нарушение1", "нарушение2"],
-      "decision": "Текст итогового решения",
+      "established_facts": ["fact1", "fact2"],
+      "violations": ["violation1", "violation2"],
+      "decision": "Text of the final decision",
       "verdict": {
           "claim_satisfied": true/false,
-          "amount_awarded": число (сумма, которая присуждается истцу),
-          "court_costs": число
+          "amount_awarded": number (amount awarded to plaintiff),
+          "court_costs": number
       },
-      "winner": "plaintiff" или "defendant" или "draw",
-      "reasoning": "Подробное обоснование решения (текст)"
+      "winner": "plaintiff" or "defendant" or "draw",
+      "reasoning": "Detailed reasoning for the decision (text)"
     }
 
-    ВАЖНО про поле "winner":
-    - "plaintiff" - если решение вынесено в пользу истца (иск удовлетворен полностью или частично)
-    - "defendant" - если решение вынесено в пользу ответчика (в иске отказано)
-    - "draw" - если обе стороны частично правы (компромиссное решение)
+    IMPORTANT about the "winner" field:
+    - "plaintiff" - if the decision is in favor of the plaintiff (claim fully or partially satisfied)
+    - "defendant" - if the decision is in favor of the defendant (claim denied)
+    - "draw" - if both parties are partially right (compromise decision)
     """
 
         messages = await self._build_multimodal_prompt(
@@ -179,7 +179,7 @@ class GeminiService:
             response = self.model.generate_content(messages)
             decision_data = self._parse_analysis_response(response.text)
 
-            # ВАЖНО: Определяем победителя если ИИ не указал
+            # IMPORTANT: Determine winner if AI didn't specify
             if 'winner' not in decision_data or not decision_data['winner']:
                 decision_data['winner'] = self._determine_winner(decision_data)
 
@@ -187,53 +187,53 @@ class GeminiService:
 
         except Exception as e:
             return {
-                "error": f"Ошибка генерации решения: {str(e)}",
+                "error": f"Error generating decision: {str(e)}",
                 "established_facts": [ev.get("description", "") for ev in evidence],
                 "violations": [],
-                "decision": "Решение не удалось вынести из-за ошибки",
+                "decision": "Failed to make decision due to error",
                 "verdict": {
                     "claim_satisfied": False,
                     "amount_awarded": 0,
                     "court_costs": 0
                 },
-                "winner": "defendant",  # По умолчанию при ошибке
+                "winner": "defendant",  # Default on error
                 "reasoning": ""
             }
 
     def _determine_winner(self, decision_data: Dict) -> str:
         """
-        Определяет победителя на основе данных решения
-        Используется как fallback если ИИ не указал winner
+        Determines the winner based on decision data
+        Used as fallback if AI didn't specify winner
         """
         verdict = decision_data.get('verdict', {})
         claim_satisfied = verdict.get('claim_satisfied', False)
         amount_awarded = verdict.get('amount_awarded', 0)
 
-        # Если иск удовлетворен и присуждена сумма
+        # If claim is satisfied and amount is awarded
         if claim_satisfied and amount_awarded > 0:
             return "plaintiff"
 
-        # Если иск удовлетворен но суммы нет (неденежное требование)
+        # If claim is satisfied but no amount (non-monetary claim)
         elif claim_satisfied:
             return "plaintiff"
 
-        # Если иск не удовлетворен
+        # If claim is not satisfied
         else:
             return "defendant"
 
     async def _download_telegram_file(self, bot: Bot, file_id: str) -> bytes:
-        """Загружает файл из Telegram по file_id"""
+        """Downloads a file from Telegram by file_id"""
         try:
             file_info: File = await bot.get_file(file_id)
             file_bytes = io.BytesIO()
             await bot.download_file(file_info.file_path, file_bytes)
             return file_bytes.getvalue()
         except Exception as e:
-            print(f"Ошибка загрузки файла {file_id}: {e}")
+            print(f"Error downloading file {file_id}: {e}")
             return b""
 
     async def _extract_text_from_pdf(self, file_bytes: bytes) -> str:
-        """Извлекает текст из PDF"""
+        """Extracts text from PDF"""
         try:
             pdf_file = io.BytesIO(file_bytes)
             pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -242,10 +242,10 @@ class GeminiService:
                 text += page.extract_text() + "\n"
             return text.strip()
         except Exception as e:
-            return f"Ошибка чтения PDF: {e}"
+            return f"Error reading PDF: {e}"
 
     async def _extract_text_from_docx(self, file_bytes: bytes) -> str:
-        """Извлекает текст из DOCX"""
+        """Extracts text from DOCX"""
         try:
             doc_file = io.BytesIO(file_bytes)
             doc = Document(doc_file)
@@ -254,10 +254,10 @@ class GeminiService:
                 text += paragraph.text + "\n"
             return text.strip()
         except Exception as e:
-            return f"Ошибка чтения DOCX: {e}"
+            return f"Error reading DOCX: {e}"
 
     async def _extract_text_from_document(self, file_bytes: bytes, filename: str) -> str:
-        """Универсальная функция извлечения текста из документов"""
+        """Universal function for extracting text from documents"""
         filename_lower = filename.lower()
 
         if filename_lower.endswith('.pdf'):
@@ -271,12 +271,12 @@ class GeminiService:
                 try:
                     return file_bytes.decode('cp1251')
                 except:
-                    return "Ошибка декодирования текстового файла"
+                    return "Error decoding text file"
         else:
-            return f"Неподдерживаемый формат документа: {filename}"
+            return f"Unsupported document format: {filename}"
 
     def _is_image(self, filename: str) -> bool:
-        """Проверяет, является ли файл изображением"""
+        """Checks if the file is an image"""
         image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.svg']
         return any(filename.lower().endswith(ext) for ext in image_extensions)
 
@@ -285,45 +285,45 @@ class GeminiService:
             bot: Bot = None
     ) -> List[Union[str, Dict]]:
         """
-        Формируем мультимодальный ввод (текст + изображения + содержимое документов).
+        Forming multimodal input (text + images + document contents).
         """
         base_prompt = f"""
     {task_instruction}
 
-    Номер дела: {case_data.get('case_number')}
-    Предмет спора: {case_data.get('topic')}
-    Категория: {case_data.get('category')}
-    Сумма иска: {case_data.get('claim_amount', 'не указана')}
-    Причина иска: {case_data.get('claim_reason', 'не указана')}
+    Case number: {case_data.get('case_number')}
+    Subject of dispute: {case_data.get('topic')}
+    Category: {case_data.get('category')}
+    Claim amount: {case_data.get('claim_amount', 'not specified')}
+    Claim reason: {case_data.get('claim_reason', 'not specified')}
 
-    Участники:
+    Participants:
     {self._format_participants(participants)}
 
-    Доказательства и аргументы:
+    Evidence and arguments:
     """
         messages: List[Union[str, Dict]] = [base_prompt]
 
         for i, ev in enumerate(evidence, 1):
-            role_text = "Истец" if ev.get("role") == "plaintiff" else "Ответчик"
+            role_text = "Plaintiff" if ev.get("role") == "plaintiff" else "Defendant"
 
             if ev["type"] == "text":
-                messages.append(f"\n{i}. {role_text} - Аргумент:\n{ev.get('content', ev.get('description', ''))}\n")
+                messages.append(f"\n{i}. {role_text} - Argument:\n{ev.get('content', ev.get('description', ''))}\n")
 
             elif ev["type"] == "ai_response":
                 messages.append(
-                    f"\n{i}. {role_text} - Ответ на вопрос ИИ:\n{ev.get('content', ev.get('description', ''))}\n")
+                    f"\n{i}. {role_text} - Answer to AI question:\n{ev.get('content', ev.get('description', ''))}\n")
 
             elif ev["type"] == "chat_history":
-                # История переписки - важное доказательство
+                # Chat history - important evidence
                 messages.append(
-                    f"\n{i}. {role_text} - История переписки:\n{ev.get('content', ev.get('description', ''))}\n"
-                    f"[ВАЖНО: Это переписка из чата, анализируй контекст и хронологию сообщений]\n")
+                    f"\n{i}. {role_text} - Chat history:\n{ev.get('content', ev.get('description', ''))}\n"
+                    f"[IMPORTANT: This is chat correspondence, analyze context and chronology of messages]\n")
 
             elif ev["type"] == "photo" and bot and ev.get("file_path"):
                 try:
                     file_bytes = await self._download_telegram_file(bot, ev["file_path"])
                     if file_bytes:
-                        # Попробуем определить MIME тип изображения
+                        # Try to determine image MIME type
                         mime_type = "image/jpeg"
                         if len(file_bytes) >= 4:
                             # PNG signature
@@ -340,12 +340,12 @@ class GeminiService:
                             "mime_type": mime_type,
                             "data": base64.b64encode(file_bytes).decode()
                         })
-                        caption = ev.get('content', 'Фото-доказательство')
-                        messages.append(f"\n{i}. {role_text} - Изображение: {caption}\n")
+                        caption = ev.get('content', 'Photo evidence')
+                        messages.append(f"\n{i}. {role_text} - Image: {caption}\n")
                     else:
-                        messages.append(f"\n{i}. {role_text} - [Ошибка загрузки изображения]\n")
+                        messages.append(f"\n{i}. {role_text} - [Error loading image]\n")
                 except Exception as e:
-                    messages.append(f"\n{i}. {role_text} - [Ошибка обработки изображения: {e}]\n")
+                    messages.append(f"\n{i}. {role_text} - [Error processing image: {e}]\n")
 
             elif ev["type"] == "document" and bot and ev.get("file_path"):
                 try:
@@ -358,7 +358,7 @@ class GeminiService:
                             filename = "document"
 
                         if self._is_image(filename):
-                            # Определяем MIME тип для изображений-документов
+                            # Determine MIME type for image-documents
                             mime_type = "image/jpeg"
                             if filename.lower().endswith('.png'):
                                 mime_type = "image/png"
@@ -371,28 +371,28 @@ class GeminiService:
                                 "mime_type": mime_type,
                                 "data": base64.b64encode(file_bytes).decode()
                             })
-                            caption = ev.get('content', 'Изображение (документ)')
-                            messages.append(f"\n{i}. {role_text} - Изображение-документ: {caption}\n")
+                            caption = ev.get('content', 'Image (document)')
+                            messages.append(f"\n{i}. {role_text} - Image-document: {caption}\n")
                         else:
                             extracted_text = await self._extract_text_from_document(file_bytes, filename)
-                            messages.append(f"\n{i}. {role_text} - Документ ({filename}):\n{extracted_text}\n")
+                            messages.append(f"\n{i}. {role_text} - Document ({filename}):\n{extracted_text}\n")
                     else:
-                        messages.append(f"\n{i}. {role_text} - [Ошибка загрузки документа]\n")
+                        messages.append(f"\n{i}. {role_text} - [Error loading document]\n")
                 except Exception as e:
-                    messages.append(f"\n{i}. {role_text} - [Ошибка обработки документа: {e}]\n")
+                    messages.append(f"\n{i}. {role_text} - [Error processing document: {e}]\n")
 
             elif ev["type"] == "video" and ev.get("file_path"):
-                caption = ev.get('content', 'Видео-доказательство')
+                caption = ev.get('content', 'Video evidence')
                 messages.append(
-                    f"\n{i}. {role_text} - Видео: {caption}\n[Содержимое видео не анализируется автоматически]\n")
+                    f"\n{i}. {role_text} - Video: {caption}\n[Video content is not automatically analyzed]\n")
 
             elif ev["type"] == "audio" and ev.get("file_path"):
-                caption = ev.get('content', 'Аудио-доказательство')
+                caption = ev.get('content', 'Audio evidence')
                 messages.append(
-                    f"\n{i}. {role_text} - Аудио: {caption}\n[Содержимое аудио не анализируется автоматически]\n")
+                    f"\n{i}. {role_text} - Audio: {caption}\n[Audio content is not automatically analyzed]\n")
 
             else:
-                description = ev.get('content', ev.get('description', 'Доказательство без описания'))
+                description = ev.get('content', ev.get('description', 'Evidence without description'))
                 messages.append(f"\n{i}. {role_text} - {ev['type']}: {description}\n")
 
         return messages
@@ -400,13 +400,13 @@ class GeminiService:
     def _format_participants(self, participants: List[Dict]) -> str:
         result = []
         for p in participants:
-            role_ru = "Истец" if p['role'] == 'plaintiff' else "Ответчик"
-            username = p.get('username', 'неизвестно')
-            result.append(f"{role_ru}: @{username}")
+            role_en = "Plaintiff" if p['role'] == 'plaintiff' else "Defendant"
+            username = p.get('username', 'unknown')
+            result.append(f"{role_en}: @{username}")
         return ", ".join(result)
 
     def _parse_analysis_response(self, response_text: str) -> Dict:
-        """Парсит ответ от Gemini, извлекая JSON"""
+        """Parses response from Gemini, extracting JSON"""
         try:
             start = response_text.find('{')
             end = response_text.rfind('}') + 1

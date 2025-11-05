@@ -300,6 +300,14 @@ class Database:
             ''', user_id)
             return row['bot_version'] if row else 'v2'
 
+    async def get_user_by_username(self, username: str):
+        """Получить пользователя по username"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT user_id, username FROM bot_users WHERE username = $1",
+                username
+            )
+
     async def get_case_version(self, case_number: str) -> str:
         """Получить версию бота по номеру дела"""
         async with self.pool.acquire() as conn:
