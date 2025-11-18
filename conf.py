@@ -9,13 +9,26 @@ class Settings(BaseSettings):
     API_ID: int = int(os.getenv("API_ID", ""))
     API_HASH: str = os.getenv("API_HASH", "")
     BOT_TOKEN: str = os.getenv("BOT_TOKEN")
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY"
+                                    )
     DATABASE_URL: str = os.getenv("DATABASE_URL")
     DISPUTE_TOKEN_WALLET: str = os.getenv("DISPUTE_TOKEN_WALLET")
     BOT_USERNAME: str = os.getenv("BOT_USERNAME")
 
+    REDIS_HOST: str = os.getenv("REDIS_HOST")
+    REDIS_PORT: int = os.getenv("REDIS_PORT")
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD")
+    DECODE_RESPONSE: bool = os.getenv("DECODE_RESPONSE")
+    REDIS_DB: int = os.getenv("REDIS_DB")
+
+    REDIS_STATE_TTL: int = 3600 * 24 * 7  # 7 дней
+    REDIS_DATA_TTL: int = 3600 * 24 * 7  # 7 дней
+
+    CLEAN_INTERVAL_DAYS: int = 7
+
     class Config:
         env_file = ".env"
+        extra = "allow"
 
 
 settings = Settings()
@@ -60,3 +73,7 @@ DISPUTE_EXAMPLES = [
     "поставка бракованного товара",
     "нарушение сроков аренды"
 ]
+
+
+CLEAN_INTERVAL_DAYS = settings.CLEAN_INTERVAL_DAYS
+DELETE_OLDER_THAN_DAYS = 7

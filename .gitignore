@@ -8,3 +8,6 @@ bot.log
 documents
 bot.session-journal
 .idea
+user.session
+photo
+user.session-journal
