@@ -444,7 +444,13 @@ async def handle_forwarded_messages(message: types.Message, state: FSMContext):
     if message.forward_from or message.forward_from_chat:
         data = await state.get_data()
         forwarded_messages = data.get("forwarded_messages", [])
+        added_message_ids = data.get("added_message_ids", set())
 
+        # Игнорируем уже добавленные сообщения
+        if message.message_id in added_message_ids:
+            return  # Не обрабатываем повторно
+
+        # Добавляем сообщение в список
         forwarded_messages.append({
             "from_user": message.forward_from.username if message.forward_from else
             message.forward_from_chat.title if message.forward_from_chat else "Неизвестно",
@@ -452,11 +458,16 @@ async def handle_forwarded_messages(message: types.Message, state: FSMContext):
             "date": message.forward_date.isoformat() if message.forward_date else None
         })
 
-        await state.update_data(forwarded_messages=forwarded_messages)
-        await message.answer(
-            f"📩 Сообщение добавлено ({len(forwarded_messages)} всего).\n"
-            f"Перешлите следующее или нажмите «✅ Завершить добавление»."
-        )
+        # Добавляем ID сообщения в set, чтобы не обрабатывать повторно
+        added_message_ids.add(message.message_id)
+
+        # Обновляем состояние один раз
+        await state.update_data(forwarded_messages=forwarded_messages, added_message_ids=added_message_ids)
+
+        # Отвечаем пользователю с минимальной нагрузкой
+        if len(forwarded_messages) % 5 == 0:  # например, каждые 5 сообщений
+            await message.answer(f"📩 Добавлено {len(forwarded_messages)} сообщений.")
+
     else:
         await message.answer("⚠️ Это не пересланное сообщение. Используйте функцию пересылки.")
 
