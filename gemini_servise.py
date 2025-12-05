@@ -15,7 +15,7 @@ from conf import settings
 class GeminiService:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     async def generate_clarifying_questions(
             self,
@@ -34,7 +34,7 @@ class GeminiService:
         instruction = f"""
         You are an AI judge. Your task is to analyze the arguments and evidence of the {"plaintiff" if current_role == "plaintiff" else "defendant"} 
         and ask clarifying questions that will help reveal details and eliminate gaps. Determine if additional 
-        questions are needed for a complete understanding of the position. Include questions about the availability of material evidence.
+        questions are needed for a complete understanding of the position. Include questions about the availability of material evidence. Use English language.
 
         IMPORTANT: 
         - This is round {round_number} out of a maximum of 3 possible rounds
@@ -139,13 +139,39 @@ class GeminiService:
         """
         Generation of full ruling and decision (JSON).
         """
-        instruction = """You are an AI judge. Review the case and form a complete ruling. 
-    Consider the provided material evidence, including images and document contents.
+        raw_amount = case_data.get('claim_amount')
+        if raw_amount is None:
+            claim_amount_text = "не указана"
+        else:
+            formatted = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.').strip()
+            claim_amount_text = f"{formatted} ETF" if formatted != "0" else "0 ETF"
 
-    IMPORTANT: 
-    - Pay special attention to participants' answers to AI questions (type 'ai_response')
-    - Chat correspondence (type 'chat_history') is also important evidence
-    - Analyze the context and chronology of messages in the correspondence"""
+        instruction = f"""You are an AI judge. You must issue a final, legally sound verdict.
+
+        CRITICAL: The plaintiff filed a claim for {claim_amount_text}.
+        You MUST mention this exact amount in the "decision" field, for example:
+        "Истец заявил требование на сумму {claim_amount_text}..."
+        Even if the claim is rejected — still write the original amount.
+
+        Consider the provided material evidence, including images, documents, and chat history.
+
+        Pay special attention to:
+        - Answers to AI questions (type 'ai_response')
+        - Chat correspondence (type 'chat_history') — analyze chronology and context
+
+        Return STRICTLY valid JSON in this format:
+        {{
+          "established_facts": [...],
+          "violations": [...],
+          "decision": "Full verdict text in Russian, mentioning the claim amount {claim_amount_text}",
+          "verdict": {{
+              "claim_satisfied": true/false,
+              "amount_awarded": number,
+              "court_costs": number
+          }},
+          "winner": "plaintiff" | "defendant" | "draw",
+          "reasoning": "Detailed reasoning..."
+        }}"""
 
         if no_evidence:
             instruction += "\n⚠️ Attention: no evidence provided. The decision must be made based solely on the parties' arguments."
@@ -287,13 +313,23 @@ class GeminiService:
         """
         Forming multimodal input (text + images + document contents).
         """
+
+        raw_amount = case_data.get('claim_amount')
+
+        if raw_amount is None or raw_amount == 'not specified':
+            claim_text = "not specified"
+        else:
+            claim_text = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.') + " ETF"
+            if claim_text.endswith('.'):
+                claim_text = claim_text[:-1] + " ETF"
         base_prompt = f"""
     {task_instruction}
+    
 
     Case number: {case_data.get('case_number')}
     Subject of dispute: {case_data.get('topic')}
     Category: {case_data.get('category')}
-    Claim amount: {case_data.get('claim_amount', 'not specified')}
+    Claim amount: {claim_text}
     Claim reason: {case_data.get('claim_reason', 'not specified')}
 
     Participants:
