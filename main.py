@@ -12,7 +12,6 @@ from redis.asyncio import Redis
 from conf import settings, CLEAN_INTERVAL_DAYS
 from database import db
 from handlers import register_handlers
-from user_client import user_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,16 +66,6 @@ async def on_startup():
         logger.error(f"❌ Ошибка подключения к базе данных: {e}")
         raise
 
-    # Инициализация пользовательского клиента
-    try:
-        client_initialized = await user_client.initialize()
-        if client_initialized:
-            logger.info("✅ Пользовательский клиент инициализирован")
-        else:
-            logger.warning("⚠️ Пользовательский клиент требует авторизации")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации пользовательского клиента: {e}")
-
     # Создание директории для документов
     try:
         os.makedirs("documents", exist_ok=True)
@@ -98,12 +87,6 @@ async def on_startup():
 async def on_shutdown():
     """Корректное завершение работы бота"""
     logger.info("🛑 Остановка ИИ-Судьи...")
-    # Отключение пользовательского клиента
-    try:
-        await user_client.disconnect()
-        logger.info("✅ Пользовательский клиент отключен")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отключении user_client: {e}")
 
     # Закрытие подключения к базе данных
     if db.pool:
