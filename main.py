@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 redis = Redis(
     host=settings.REDIS_HOST or "localhost",
     port=settings.REDIS_PORT or 6379,
-    password=settings.REDIS_PASSWORD or "38856",
+    # password=settings.REDIS_PASSWORD or "38856",
     db=settings.REDIS_DB or 0,
     decode_responses=True
 )
