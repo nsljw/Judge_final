@@ -32,9 +32,8 @@ class GeminiService:
         role_text = "plaintiff" if current_role == "plaintiff" else "defendant"
 
         instruction = f"""
-        You are an AI judge. Your task is to analyze the arguments and evidence of the {"plaintiff" if current_role == "plaintiff" else "defendant"} 
-        and ask clarifying questions that will help reveal details and eliminate gaps. Determine if additional 
-        questions are needed for a complete understanding of the position. Include questions about the availability of material evidence. Use English language.
+        You are an AI judge. Analyze the arguments and evidence of the {"plaintiff" if current_role == "plaintiff" else "defendant"} and ask clarifying questions to reveal details and fill gaps. 
+        Focus on material evidence; without it, state that a decision cannot be made objectively.
 
         IMPORTANT: 
         - This is round {round_number} out of a maximum of 3 possible rounds
@@ -96,7 +95,7 @@ class GeminiService:
         Basic case analysis (JSON with facts, violations, decision).
         """
         messages = await self._build_multimodal_prompt(
-            "You are an AI judge. Conduct a case analysis and return JSON.",
+            "You are an AI judge. Conduct a case analysis and return JSON in English.",
             case_data, participants, evidence, bot
         )
         try:
@@ -119,7 +118,7 @@ class GeminiService:
         Generation of reasoning text only.
         """
         messages = await self._build_multimodal_prompt(
-            "You are an AI judge. Formulate only the reasoning for the decision (plain text).",
+            "You are an AI judge. Formulate only the reasoning for the decision in English (plain text).",
             case_data, participants, evidence, bot
         )
         try:
@@ -141,16 +140,16 @@ class GeminiService:
         """
         raw_amount = case_data.get('claim_amount')
         if raw_amount is None:
-            claim_amount_text = "не указана"
+            claim_amount_text = "not specified"
         else:
             formatted = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.').strip()
             claim_amount_text = f"{formatted} ETF" if formatted != "0" else "0 ETF"
 
-        instruction = f"""You are an AI judge. You must issue a final, legally sound verdict.
+        instruction = f"""You are an AI judge. You must issue a final, legally sound verdict IN ENGLISH.
 
         CRITICAL: The plaintiff filed a claim for {claim_amount_text}.
         You MUST mention this exact amount in the "decision" field, for example:
-        "Истец заявил требование на сумму {claim_amount_text}..."
+        "The plaintiff filed a claim for the amount of {claim_amount_text}..."
         Even if the claim is rejected — still write the original amount.
 
         Consider the provided material evidence, including images, documents, and chat history.
@@ -159,42 +158,46 @@ class GeminiService:
         - Answers to AI questions (type 'ai_response')
         - Chat correspondence (type 'chat_history') — analyze chronology and context
 
+        ALL TEXT MUST BE IN ENGLISH.
+
         Return STRICTLY valid JSON in this format:
         {{
           "established_facts": [...],
           "violations": [...],
-          "decision": "Full verdict text in Russian, mentioning the claim amount {claim_amount_text}",
+          "decision": "Full verdict text IN ENGLISH, mentioning the claim amount {claim_amount_text}",
           "verdict": {{
               "claim_satisfied": true/false,
               "amount_awarded": number,
               "court_costs": number
           }},
           "winner": "plaintiff" | "defendant" | "draw",
-          "reasoning": "Detailed reasoning..."
+          "reasoning": "Detailed reasoning IN ENGLISH..."
         }}"""
 
         if no_evidence:
             instruction += "\n⚠️ Attention: no evidence provided. The decision must be made based solely on the parties' arguments."
 
         instruction += """
-    Return JSON strictly in the format:
+    Return JSON strictly in the format (ALL TEXT IN ENGLISH):
     {
       "established_facts": ["fact1", "fact2"],
       "violations": ["violation1", "violation2"],
-      "decision": "Text of the final decision",
+      "decision": "Text of the final decision IN ENGLISH",
       "verdict": {
           "claim_satisfied": true/false,
           "amount_awarded": number (amount awarded to plaintiff),
           "court_costs": number
       },
       "winner": "plaintiff" or "defendant" or "draw",
-      "reasoning": "Detailed reasoning for the decision (text)"
+      "reasoning": "Detailed reasoning for the decision IN ENGLISH"
     }
 
     IMPORTANT about the "winner" field:
     - "plaintiff" - if the decision is in favor of the plaintiff (claim fully or partially satisfied)
     - "defendant" - if the decision is in favor of the defendant (claim denied)
     - "draw" - if both parties are partially right (compromise decision)
+
+    REMEMBER: All text content must be in English language.
     """
 
         messages = await self._build_multimodal_prompt(
@@ -324,7 +327,7 @@ class GeminiService:
                 claim_text = claim_text[:-1] + " ETF"
         base_prompt = f"""
     {task_instruction}
-    
+
 
     Case number: {case_data.get('case_number')}
     Subject of dispute: {case_data.get('topic')}

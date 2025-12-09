@@ -8,7 +8,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
-    FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+    FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardRemove
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -141,7 +141,7 @@ async def start_command(message: types.Message, state: FSMContext):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="👨‍💼 Participate in the case",
+                text="✅ Participate in the case",
                 callback_data=f"accept_defendant:{case_number}"
             )],
             [InlineKeyboardButton(
@@ -353,7 +353,7 @@ async def input_claim_amount(message: types.Message, state: FSMContext):
     if user_input == "yes":
         kb = get_back_to_menu_keyboard()
         await message.answer(
-            "Enter the claim amount in ETF (e.g., 0.00001):",
+            "Enter the claim amount in ETF:",
             reply_markup=kb
         )
         return
@@ -378,8 +378,8 @@ async def proceed_to_message_history(message: types.Message, state: FSMContext):
     """Proceed to message history review"""
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Add chat history")],
-            [KeyboardButton(text="Skip")],
+            [KeyboardButton(text="➕ Add chat history")],
+            [KeyboardButton(text="⏩ Skip")],
             [KeyboardButton(text="🔙 Back to Menu")]
         ],
         resize_keyboard=True,
@@ -402,10 +402,10 @@ async def handle_message_history_choice(message: types.Message, state: FSMContex
         await return_to_main_menu(message, state)
         return
 
-    if message.text == "Add chat history":
+    if message.text == "➕ Add chat history":
         kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="Finish adding")],
+                [KeyboardButton(text="⏸ ️Finish adding")],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True
@@ -413,12 +413,12 @@ async def handle_message_history_choice(message: types.Message, state: FSMContex
         await state.set_state(DisputeState.waiting_forwarded_messages)
         await message.answer(
             "<b>Forward messages from the conversation here</b>\n\n"
-            "When finished, press «Finish adding».",
+            "When finished, press «⏸ ️Finish adding».",
             reply_markup=kb,
             parse_mode=ParseMode.HTML
         )
 
-    elif message.text == "Skip":
+    elif message.text == "⏩ Skip":
         await proceed_to_defendant_selection(message, state)
 
     else:
@@ -432,7 +432,7 @@ async def handle_forwarded_messages(message: types.Message, state: FSMContext):
         await return_to_main_menu(message, state)
         return
 
-    if message.text == "Finish adding":
+    if message.text == "⏸ ️Finish adding":
         data = await state.get_data()
         forwarded_messages = data.get("forwarded_messages", [])
 
@@ -483,6 +483,7 @@ async def proceed_to_defendant_selection(message: types.Message, state: FSMConte
         topic=data["topic"],
         category=data["category"],
         claim_reason=data["claim_reason"],
+        claim_amount=data.get("claim_amount"),
         mode="full",
         plaintiff_id=message.from_user.id,
         plaintiff_username=message.from_user.username or message.from_user.full_name,
@@ -526,11 +527,11 @@ async def proceed_to_defendant_selection(message: types.Message, state: FSMConte
 
     await state.set_state(DisputeState.waiting_defendant_username)
     await message.answer(
-        f"<b>Case #{case_number} created!</b>\n\n"
-        f"Topic: {data['topic']}\n"
-        f"Category: {data['category']}\n"
-        f"Claim amount: {claim_text}\n\n"
-        f"Enter defendant's username (e.g., @username or username):",
+        f"📄 <b>Case #{case_number} created!</b>\n\n"
+        f"📝 Topic: {data['topic']}\n"
+        f"📂 Category: {data['category']}\n"
+        f"💰 Claim amount: {claim_text}\n\n"
+        f"👤 Enter defendant's username (e.g., @username or username):",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
@@ -544,7 +545,7 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
         return
 
     if not message.text:
-        await message.answer("Enter defendant's username.")
+        await message.answer("👤 Enter defendant's username.")
         return
 
     username = message.text.strip()
@@ -566,7 +567,7 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
 
             kb_defendant = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="👨‍💼 Participate in the case",
+                    text="✅ Participate in the case",
                     callback_data=f"accept_defendant:{case_number}"
                 )],
                 [InlineKeyboardButton(
@@ -582,7 +583,7 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
                     f"Case #{case_number}\n"
                     f"Topic: {data['topic']}\n"
                     f"Category: {data['category']}\n"
-                    f"Claim amount: {data.get('claim_amount', 'not specified')}\n\n"
+                    f"Claim amount: {data.get('claim_amount', 'not specified')} ETF\n\n"
                     f"Plaintiff: @{message.from_user.username or message.from_user.full_name}\n\n"
                     f"You have been invited as a defendant.\n"
                     f"Accept or decline participation:",
@@ -725,6 +726,7 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
     kb_plaintiff = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="✅ Finish arguments")],
+            [KeyboardButton(text="⛔ Pause case")],
             [KeyboardButton(text="🔙 Back to Menu")]
         ],
         resize_keyboard=True
@@ -796,6 +798,10 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         await return_to_main_menu(message, state)
         return
 
+    if message.text == "⛔ Pause case":
+        await pause_case_handler(message, state)
+        return
+
     if message.text == "✅ Finish arguments":
         data = await state.get_data()
         case_number = data.get("case_number")
@@ -812,6 +818,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         kb_defendant = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✅ Finish arguments")],
+                [KeyboardButton(text="⛔ Pause case")],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True
@@ -926,6 +933,10 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
     """Handling defendant's arguments"""
     if message.text == "🔙 Back to Menu":
         await return_to_main_menu(message, state)
+        return
+
+    if message.text == "⛔ Pause case":
+        await pause_case_handler(message, state)
         return
 
     if message.text == "✅ Finish arguments":
@@ -1221,7 +1232,9 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
     try:
         await message.bot.send_message(
             plaintiff_id,
-            "<b>AI judge is analyzing the case and rendering a decision...</b>",
+            "<b>⚖️ AI judge is analyzing the case and rendering a decision...</b>\n\n"
+            "⏳ Please wait, this may take a moment...",
+            reply_markup=ReplyKeyboardRemove(),
             parse_mode=ParseMode.HTML
         )
     except:
@@ -1231,7 +1244,9 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
         try:
             await message.bot.send_message(
                 defendant_id,
-                "<b>AI judge is analyzing the case and rendering a decision...</b>",
+                "<b>⚖️ AI judge is analyzing the case and rendering a decision...</b>\n\n"
+                "⏳ Please wait, this may take a moment...",
+                reply_markup=ReplyKeyboardRemove(),
                 parse_mode=ParseMode.HTML
             )
         except:
@@ -1269,32 +1284,48 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
 
     kb = get_main_menu_keyboard()
 
-    # Send to plaintiff
     try:
         await message.bot.send_message(
             plaintiff_id,
-            "<b>Case closed!</b>\n\n"
-            "Here is the final verdict:",
-            reply_markup=kb,
+            "✅ <b>Case closed!</b>\n\n"
+            "📄 Here is the final verdict:",
             parse_mode=ParseMode.HTML
         )
         if filepath:
-            await message.bot.send_document(plaintiff_id, FSInputFile(filepath))
+            await message.bot.send_document(
+                plaintiff_id,
+                FSInputFile(filepath),
+                reply_markup=kb
+            )
+        else:
+            await message.bot.send_message(
+                plaintiff_id,
+                "⚠️ Error generating PDF document.",
+                reply_markup=kb
+            )
     except Exception as e:
         print(f"Failed to send to plaintiff: {e}")
 
-    # Send to defendant
     if defendant_id:
         try:
             await message.bot.send_message(
                 defendant_id,
-                "<b>Case closed!</b>\n\n"
-                "Here is the final verdict:",
-                reply_markup=kb,
+                "✅ <b>Case closed!</b>\n\n"
+                "📄 Here is the final verdict:",
                 parse_mode=ParseMode.HTML
             )
             if filepath:
-                await message.bot.send_document(defendant_id, FSInputFile(filepath))
+                await message.bot.send_document(
+                    defendant_id,
+                    FSInputFile(filepath),
+                    reply_markup=kb
+                )
+            else:
+                await message.bot.send_message(
+                    defendant_id,
+                    "⚠️ Error generating PDF document.",
+                    reply_markup=kb
+                )
         except Exception as e:
             print(f"Failed to send to defendant: {e}")
 
@@ -1307,13 +1338,13 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
 
             if winner_code == "plaintiff":
                 winner_text = f"@{plaintiff_username} (Plaintiff)"
-                winner_emoji = "Winner"
+                winner_emoji = "🏆"
             elif winner_code == "defendant":
                 winner_text = f"@{defendant_username} (Defendant)"
-                winner_emoji = "Winner"
+                winner_emoji = "🏆"
             else:
                 winner_text = "Compromise decision (both sides partially right)"
-                winner_emoji = "Scales"
+                winner_emoji = "⚖️"
 
             verdict = decision.get("verdict", {})
             amount_awarded = verdict.get("amount_awarded", 0)
@@ -1322,18 +1353,18 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
             verdict_details = ""
             if amount_awarded > 0:
                 if claim_amount and amount_awarded < claim_amount:
-                    verdict_details = f"\nAwarded: {amount_awarded} ETF (partial satisfaction out of {claim_amount} ETF)"
+                    verdict_details = f"\n💰 Awarded: {amount_awarded} ETF (partial satisfaction out of {claim_amount} ETF)"
                 else:
-                    verdict_details = f"\nAwarded: {amount_awarded} ETF"
+                    verdict_details = f"\n💰 Awarded: {amount_awarded} ETF"
 
             group_text = (
-                f"<b>VERDICT FOR CASE #{case_number}</b>\n\n"
-                f"Topic: {case['topic']}\n"
-                f"Plaintiff: @{plaintiff_username}\n"
-                f"Defendant: @{defendant_username}\n"
+                f"<b>⚖️ VERDICT FOR CASE #{case_number}</b>\n\n"
+                f"📝 Topic: {case['topic']}\n"
+                f"👤 Plaintiff: @{plaintiff_username}\n"
+                f"👤 Defendant: @{defendant_username}\n"
                 f"{verdict_details}\n\n"
                 f"{winner_emoji} <b>Decision in favor of:</b>\n{winner_text}\n\n"
-                f"Full document sent to participants in private messages."
+                f"📄 Full document sent to participants in private messages."
             )
 
             await message.bot.send_message(
@@ -1346,7 +1377,7 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
                 await message.bot.send_document(
                     case["chat_id"],
                     FSInputFile(filepath),
-                    caption=f"Full verdict for case #{case_number}"
+                    caption=f"📄 Full verdict for case #{case_number}"
                 )
         except Exception as e:
             print(f"Error sending to group: {e}")
@@ -1357,13 +1388,7 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
         except:
             pass
 
-    await message.answer(
-        "Verdict successfully rendered and sent to all participants!",
-        reply_markup=kb
-    )
-
     await state.clear()
-
 
 # =============================================================================
 # HELP & AUXILIARY COMMANDS
@@ -1530,6 +1555,7 @@ async def resume_case(callback: CallbackQuery, state: FSMContext):
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✅ Finish arguments")],
+                [KeyboardButton(text="⛔ Pause case")],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True
@@ -1545,6 +1571,7 @@ async def resume_case(callback: CallbackQuery, state: FSMContext):
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✅ Finish arguments")],
+                [KeyboardButton(text="⛔ Pause case")],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True
@@ -1647,7 +1674,7 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
 
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Resume case")],
+            [KeyboardButton(text="⏩ Resume case")],
             [KeyboardButton(text="🔙 Back to Menu")]
         ],
         resize_keyboard=True
@@ -1655,7 +1682,7 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
 
     await message.answer(
         f"<b>Case #{case_number} has been paused</b>\n\n"
-        f"To resume, press «Resume case»",
+        f"To resume, press «⏩ Resume case»",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
@@ -1682,9 +1709,9 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
             pass
 
 
-@router.message(F.text == "Resume case")
+@router.message(F.text == "⏩ Resume case")
 async def continue_case_handler(message: types.Message, state: FSMContext):
-    """Resume case after pause"""
+    """⏩ Resume case after pause"""
     data = await state.get_data()
     case_number = data.get("case_number")
 
@@ -1748,8 +1775,8 @@ async def continue_case_handler(message: types.Message, state: FSMContext):
 @router.message(DisputeState.case_paused)
 async def handle_paused_messages(message: types.Message):
     """Block messages while case is paused"""
-    if message.text not in ["Resume case", "🔙 Back to Menu"]:
-        await message.answer("Case is paused. Press «Resume case» to continue.")
+    if message.text not in ["⏩ Resume case", "🔙 Back to Menu"]:
+        await message.answer("Case is paused. Press «⏩ Resume case» to continue.")
 
 
 # =============================================================================
