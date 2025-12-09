@@ -25,7 +25,7 @@ class Database:
                     topic TEXT,
                     category VARCHAR(100),
                     claim_amount DECIMAL(15,2),
-                    claim_reason VARCHAR(100),
+                    claim_reason VARCHAR(500),
                     mode VARCHAR(20),
                     version VARCHAR (10) DEFAULT 'v2', 
                     plaintiff_id BIGINT,
