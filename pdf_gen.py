@@ -128,17 +128,17 @@ class PDFGenerator:
         story.append(Paragraph(f"Date: {current_date}", self.styles['Custom']))
         story.append(Spacer(1, 0.3 * cm))
 
+        story.append(Paragraph("Case Details::", self.styles['CustomHeading']))
+        story.append(Spacer(1, 0.3 * cm))
         subject = f"<b>Subject of dispute:</b> {case_data.get('claim_reason', 'Not specified')}"
         story.append(Paragraph(subject, self.styles['Custom']))
         story.append(Spacer(1, 0.3 * cm))
 
-        # Сумма иска — теперь безопасно
         claim_amount_str = self.safe_btc(case_data.get('claim_amount'))
         story.append(Paragraph(f"<b>Claim Amount:</b> {claim_amount_str}", self.styles['Custom']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Участники
-        story.append(Paragraph("COMPOSITION OF THE ARBITRATION:", self.styles['CustomHeading']))
+        story.append(Paragraph("PARTIES INVOLVED:", self.styles['CustomHeading']))
         if participants:
             role_map = {
                 'plaintiff': 'Plaintiff',
@@ -174,7 +174,7 @@ class PDFGenerator:
         story.append(Spacer(1, 0.3 * cm))
 
         # Нарушения
-        story.append(Paragraph("VIOLATIONS IDENTIFIED:", self.styles['CustomHeading']))
+        story.append(Paragraph("FINDINGS:", self.styles['CustomHeading']))
         violations = decision.get('violations', [])
         if violations:
             for i, violation in enumerate(violations, 1):
@@ -184,13 +184,13 @@ class PDFGenerator:
         story.append(Spacer(1, 0.5 * cm))
 
         # Решение
-        story.append(Paragraph("SOLUTION:", self.styles['CustomHeading']))
+        story.append(Paragraph("DECISION:", self.styles['CustomHeading']))
         decision_text = decision.get('decision', 'The decision has not been made')
         story.append(Paragraph(decision_text, self.styles['Custom']))
         story.append(Spacer(1, 0.5 * cm))
 
         # Постановил
-        story.append(Paragraph("DECIDED:", self.styles['CustomHeading']))
+        story.append(Paragraph("RULING:", self.styles['CustomHeading']))
 
         verdict = decision.get('verdict', {})
         awarded_raw = verdict.get('amount_awarded')
@@ -241,13 +241,13 @@ class PDFGenerator:
 
         # Обоснование
         if decision.get('reasoning'):
-            story.append(Paragraph("RATIONALE:", self.styles['CustomHeading']))
+            story.append(Paragraph("REASONING:", self.styles['CustomHeading']))
             story.append(Paragraph(decision['reasoning'], self.styles['Custom']))
 
         # Подпись
         story.append(Spacer(1, 1 * cm))
         story.append(Paragraph("AI-Judge", self.styles['Custom']))
-        story.append(Paragraph(f"The document was generated automatically. {current_date}", self.styles['Custom']))
+        story.append(Paragraph(f"Document generated automatically on {current_date}", self.styles['Custom']))
 
         doc.build(story)
         buffer.seek(0)

@@ -49,10 +49,10 @@ class MenuState(StatesGroup):
 
 CATEGORIES = [
     "Breach of contract",
-    "Plagiarism / Intellectual property",
+    "IP & Plagiarism",
     "Conflict / Dispute",
     "Debt / Loan",
-    "Property division",
+    "Asset Division",
     "Debate",
 ]
 
@@ -61,7 +61,7 @@ def get_main_menu_keyboard():
     """Returns the main menu keyboard for private chats"""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="⚖️ Start Case")],
+            [KeyboardButton(text="⚖️ Open New Case")],
             [KeyboardButton(text="📂 My Cases")],
             [KeyboardButton(text="📝 Draft")],
             [KeyboardButton(text="ℹ️ Help")]
@@ -105,82 +105,83 @@ async def start_command(message: types.Message, state: FSMContext):
         bot_username = (await message.bot.get_me()).username
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="📍 Go to a private chat with the bot",
+                text="📩 Go to Private Chat",
                 url=f"https://t.me/{bot_username}?start=group_{message.chat.id}"
             )]
         ])
 
         await message.answer(
-            "Hello! I am an AI judge for dispute resolution.\n\n"
-            "To get started, go to a private chat with me:",
+            "👋 Hi! I am the AI Judge. I help resolve disputes fairly using Artificial Intelligence.\n\n"
+            "🔹 To start a case, please switch to a private chat with me:",
             reply_markup=kb
         )
         return
 
-    # In private chat — full menu
     args = message.text.split()[1:] if len(message.text.split()) > 1 else []
 
-    # Save user to DB
     await db.save_bot_user(
         message.from_user.id,
         message.from_user.username or message.from_user.full_name
     )
 
-    # If came from a group — save group chat_id
     group_chat_id = None
     if args and args[0].startswith("group_"):
         try:
             group_chat_id = int(args[0].replace("group_", ""))
             await state.update_data(group_chat_id=group_chat_id)
-        except:
-            pass
+        except Exception as e:
+            print(f"Error parsing group_chat_id: {e}")
 
-    # If this is a defendant invitation
     if args and args[0].startswith("defendant_"):
         case_number = args[0].replace("defendant_", "")
 
+        case = await db.get_case_by_number(case_number)
+
+        if not case:
+            await message.answer("❌ Case not found. The case may have been deleted or doesn't exist.")
+            return
+
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="✅ Participate in the case",
+                text="✅ Accept & Join Case",
                 callback_data=f"accept_defendant:{case_number}"
             )],
             [InlineKeyboardButton(
-                text="❌ Reject",
+                text="❌ Decline",
                 callback_data=f"reject_defendant:{case_number}"
             )]
         ])
-        data = await state.get_data()
-        topic = data.get("topic")
-        claim_amount = data.get("claim_amount")
-        claim_reason = data.get("claim_reason")
+
+        claim_text = "not specified"
+        if case.get("claim_amount"):
+            try:
+                claim_text = f"{float(case['claim_amount']):,.2f} USD"
+            except (ValueError, TypeError):
+                claim_text = "not specified"
 
         await message.answer(
-            f"You have been invited to participate in case #{case_number} as a defendant.\n\n"
-            f"Accept or decline participation:\n"
-            f"Case: {case_number}\n"
-            f"Topic: {topic}\n"
-            f"Claim: {claim_reason}"
-            f"Claim amount: {claim_amount}",
-            reply_markup=kb
+            f"📋 You've been invited to a case. You are named as the defendant in Case #{case_number}.\n\n"
+            f"<b>Please accept or decline participation:</b>\n\n"
+            f"Topic: {case['topic']}\n"
+            f"Claim reason: {case['claim_reason']}\n"
+            f"Claim amount: {claim_text}",
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
         )
         return
 
-    # Regular start in private chat
     kb = get_main_menu_keyboard()
     await message.answer(
-        "Welcome! I am an AI judge.\n\n"
-        "I will help resolve your dispute objectively.\n"
-        "The entire process takes place here in private messages.\n\n"
-        "Choose an action:",
-        reply_markup=kb
+        "👋 Welcome! I am the AI Judge.\n\n"
+        "I'm here to settle your disputes fairly and objectively using artificial intelligence.\n"
+        "The entire process happens right here in direct messages (DMs).\n\n"
+        "<b>What would you like to do?</b>",
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
     )
 
 
-# =============================================================================
-# CASE CREATION IN PRIVATE CHAT
-# =============================================================================
-
-@router.message(F.text == "⚖️ Start Case")
+@router.message(F.text == "⚖️ Open New Case")
 async def start_dispute_pm(message: types.Message, state: FSMContext):
     """Starting case creation in private chat"""
     if message.chat.type != "private":
@@ -190,7 +191,6 @@ async def start_dispute_pm(message: types.Message, state: FSMContext):
     data = await state.get_data()
     group_chat_id = data.get("group_chat_id")
 
-    # If a group is linked — use it
     if group_chat_id:
         await state.update_data(chat_id=group_chat_id)
         kb = ReplyKeyboardMarkup(
@@ -205,11 +205,10 @@ async def start_dispute_pm(message: types.Message, state: FSMContext):
             reply_markup=kb
         )
     else:
-        # Ask: with group or without
         kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="📱 Work without group")],
-                [KeyboardButton(text="👥 Link to group")],
+                [KeyboardButton(text="📱 Go Private")],
+                [KeyboardButton(text="👥 Link to Group")],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True,
@@ -217,9 +216,9 @@ async def start_dispute_pm(message: types.Message, state: FSMContext):
         )
         await state.set_state(DisputeState.waiting_start_mode)
         await message.answer(
-            "Choose the mode:\n\n"
-            "📱 Work without group - the entire process is only in private chat\n"
-            "👥 Link to group - the result will be sent to the group",
+            "<b> Select a mode: </b>\n\n"
+            "📱 <b>Private Mode</b> — The entire process stays in Direct Messages. \n"
+            "👥 <b>Group Mode</b> — The process is private, but the final verdict will be posted to a group chat.",
             reply_markup=kb,
             parse_mode=ParseMode.HTML
         )
@@ -232,29 +231,27 @@ async def select_start_mode(message: types.Message, state: FSMContext):
         await return_to_main_menu(message, state)
         return
 
-    if message.text == "📱 Work without group":
+    if message.text == "📱 Go Private":
         await state.update_data(chat_id=None)
         await state.set_state(DisputeState.waiting_topic)
         kb = get_back_to_menu_keyboard()
         await message.answer(
-            "Enter the dispute topic:",
+            "📝 Enter the dispute topic:",
             reply_markup=kb
         )
 
-    elif message.text == "👥 Link to group":
+    elif message.text == "👥 Link to Group":
         kb = get_back_to_menu_keyboard()
         await state.set_state(DisputeState.waiting_group_link)
         await message.answer(
             "Add me to the group as an administrator, then:\n\n"
             "1. In the group, type /start\n"
-            "2. Press the button to go to private chat\n"
+            "2. Tap the button to go to private chat\n"
             "3. Continue creating the case here\n\n"
             "Or send /start again after adding me to the group.",
             reply_markup=kb
         )
         await state.clear()
-    else:
-        await message.answer("Please choose one of the suggested options.")
 
 
 # =============================================================================
@@ -269,7 +266,7 @@ async def input_topic(message: types.Message, state: FSMContext):
         return
 
     if not message.text:
-        await message.answer("Please enter the dispute topic as text.")
+        await message.answer("Please enter the dispute topic.")
         return
 
     topic = message.text.strip()
@@ -323,7 +320,8 @@ async def input_claim_reason(message: types.Message, state: FSMContext):
         return
 
     if not message.text:
-        await message.answer("Please describe your claim.")
+        await message.answer(
+            "Describe your claim against the defendant. Be specific about the dispute and your demands: ")
         return
 
     claim_reason = message.text.strip()
@@ -338,7 +336,7 @@ async def input_claim_reason(message: types.Message, state: FSMContext):
         one_time_keyboard=True
     )
     await state.set_state(DisputeState.waiting_claim_amount)
-    await message.answer("Do you want to specify the claim amount?(ETF)", reply_markup=kb)
+    await message.answer("Do you want to claim monetary damages?", reply_markup=kb)
 
 
 @router.message(DisputeState.waiting_claim_amount)
@@ -353,7 +351,7 @@ async def input_claim_amount(message: types.Message, state: FSMContext):
     if user_input == "yes":
         kb = get_back_to_menu_keyboard()
         await message.answer(
-            "Enter the claim amount in ETF:",
+            "Enter the claim amount (USD):",
             reply_markup=kb
         )
         return
@@ -378,7 +376,7 @@ async def proceed_to_message_history(message: types.Message, state: FSMContext):
     """Proceed to message history review"""
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Add chat history")],
+            [KeyboardButton(text="📱 Add Chat History")],
             [KeyboardButton(text="⏩ Skip")],
             [KeyboardButton(text="🔙 Back to Menu")]
         ],
@@ -388,8 +386,8 @@ async def proceed_to_message_history(message: types.Message, state: FSMContext):
 
     await state.set_state(DisputeState.waiting_message_history)
     await message.answer(
-        "<b>Would you like to add chat history as evidence?</b>\n\n"
-        "You can forward messages from your dispute here.",
+        "<b>Do you want to add chat history as evidence? </b>\n\n"
+        "You can forward messages from your dispute directly here.",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
@@ -402,7 +400,7 @@ async def handle_message_history_choice(message: types.Message, state: FSMContex
         await return_to_main_menu(message, state)
         return
 
-    if message.text == "➕ Add chat history":
+    if message.text == "📱 Add Chat History":
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="⏸ ️Finish adding")],
@@ -494,7 +492,6 @@ async def proceed_to_defendant_selection(message: types.Message, state: FSMConte
     await state.update_data(case_number=case_number)
     await db.update_case_stage(case_number, "waiting_defendant")
 
-    # Save forwarded chat as evidence
     forwarded_messages = data.get("forwarded_messages", [])
     if forwarded_messages:
         history_text = "Chat history:\n\n"
@@ -516,22 +513,25 @@ async def proceed_to_defendant_selection(message: types.Message, state: FSMConte
         ],
         resize_keyboard=True
     )
+
     raw_amount = data.get('claim_amount')
 
     if raw_amount is None or raw_amount == 'not specified':
         claim_text = "not specified"
     else:
-        claim_text = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.') + " ETF"
-        if claim_text.endswith('.'):
-            claim_text = claim_text[:-1] + " ETF"
+        try:
+            # Форматируем с 2 десятичными знаками
+            claim_text = f"{float(raw_amount):,.2f} USD"
+        except (ValueError, TypeError):
+            claim_text = "not specified"
 
     await state.set_state(DisputeState.waiting_defendant_username)
     await message.answer(
-        f"📄 <b>Case #{case_number} created!</b>\n\n"
+        f"📄 <b>⚖️ New Case #{case_number} Opened!</b>\n\n"
         f"📝 Topic: {data['topic']}\n"
         f"📂 Category: {data['category']}\n"
         f"💰 Claim amount: {claim_text}\n\n"
-        f"👤 Enter defendant's username (e.g., @username or username):",
+        f"👤 <b>Enter the defendant's username (e.g., @username):</b>",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
@@ -561,17 +561,25 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
         bot_username = (await message.bot.get_me()).username
         invite_link = f"https://t.me/{bot_username}?start=defendant_{case_number}"
 
+        # Форматируем сумму иска
+        claim_text = "not specified"
+        if data.get("claim_amount"):
+            try:
+                claim_text = f"{float(data['claim_amount']):,.2f} ETF"
+            except (ValueError, TypeError):
+                claim_text = "not specified"
+
         if defendant_user:
             defendant_id = defendant_user['user_id']
             await state.update_data(defendant_username=username)
 
             kb_defendant = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="✅ Participate in the case",
+                    text="✅ Accept & Join Case",
                     callback_data=f"accept_defendant:{case_number}"
                 )],
                 [InlineKeyboardButton(
-                    text="❌ Reject",
+                    text="❌ Decline",
                     callback_data=f"reject_defendant:{case_number}"
                 )]
             ])
@@ -583,10 +591,10 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
                     f"Case #{case_number}\n"
                     f"Topic: {data['topic']}\n"
                     f"Category: {data['category']}\n"
-                    f"Claim amount: {data.get('claim_amount', 'not specified')} ETF\n\n"
+                    f"Claim amount: {claim_text}\n\n"
                     f"Plaintiff: @{message.from_user.username or message.from_user.full_name}\n\n"
-                    f"You have been invited as a defendant.\n"
-                    f"Accept or decline participation:",
+                    f"📋 You have been named the Defendant\n"
+                    f"Please accept or decline participation:",
                     reply_markup=kb_defendant,
                     parse_mode=ParseMode.HTML
                 )
@@ -599,40 +607,34 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
                     parse_mode=ParseMode.HTML
                 )
 
-            except Exception:
-                kb_copy = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="Copy link",
-                        url=invite_link
-                    )]
-                ])
+            except Exception as e:
+                print(f"Could not send direct message to defendant: {e}")
 
+                # Отправляем ссылку с превью
                 await message.answer(
                     f"Could not send invitation to @{username} directly.\n\n"
                     f"The user may have blocked the bot or not started a chat.\n\n"
-                    f"Send this link to the defendant manually:\n\n"
-                    f"<code>{invite_link}</code>",
-                    reply_markup=kb_copy,
-                    parse_mode=ParseMode.HTML
+                    f"<b>Send this link to the defendant manually:</b>\n\n"
+                    f"{invite_link}\n\n"
+                    f"⚖️ <b>Telegram AI Judge</b>\n"
+                    f"<i>Resolve conflicts fairly with AI-powered arbitration</i>",
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=False
                 )
         else:
             await state.update_data(defendant_username=username)
 
-            kb_copy = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="Copy link",
-                    url=invite_link
-                )]
-            ])
-
+            # Отправляем ссылку с превью
             await message.answer(
                 f"<b>User @{username} not found in the database</b>\n\n"
                 f"This means they haven't interacted with the bot yet.\n\n"
-                f"Send this link to @{username}:\n\n"
-                f"<code>{invite_link}</code>\n\n"
-                f"You will be notified when the defendant joins.",
-                reply_markup=kb_copy,
-                parse_mode=ParseMode.HTML
+                f"<b>Send this link to @{username}:</b>\n\n"
+                f"{invite_link}\n\n"
+                f"⚖️ <b>Telegram AI Judge</b>\n"
+                f"<i>Resolve conflicts fairly with AI-powered arbitration</i>\n\n"
+                f"Once the defendant joins, you'll be notified immediately.",
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=False
             )
 
         # Notify group if linked
@@ -641,31 +643,32 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
             try:
                 await message.bot.send_message(
                     chat_id,
-                    f"Case #{case_number} created\n"
+                    f"⚖️ New Case #{case_number} Opened!\n"
                     f"Topic: {data['topic']}\n"
                     f"Plaintiff: @{message.from_user.username or message.from_user.full_name}\n"
                     f"Defendant: @{username}\n\n"
                     f"The process takes place in private messages with the bot."
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"Could not send notification to group: {e}")
 
-        await state.set_state(DisputeState.waiting_defendant_confirmation)
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="📂 My Cases")],
-                [KeyboardButton(text="🔙 Back to Menu")]
-            ],
-            resize_keyboard=True
-        )
-        await message.answer(
-            "Waiting for defendant's confirmation...\n\n"
-            "You can continue after the defendant accepts.",
-            reply_markup=kb
-        )
+        # await state.set_state(DisputeState.waiting_defendant_confirmation)
+        # kb = ReplyKeyboardMarkup(
+        #     keyboard=[
+        #         [KeyboardButton(text="📂 My Cases")],
+        #         [KeyboardButton(text="🔙 Back to Menu")]
+        #     ],
+        #     resize_keyboard=True
+        # )
+        # await message.answer(
+        #     "Waiting for defendant's confirmation...\n\n"
+        #     "You can continue after the defendant accepts.",
+        #     reply_markup=kb
+        # )
 
     except Exception as e:
-        await message.answer(f"Error: {e}\nTry again.")
+        print(f"Error in input_defendant_username: {e}")
+        await message.answer(f"Error: {e}\nPlease try again.")
 
 
 # =============================================================================
@@ -676,14 +679,14 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
 async def accept_defendant(callback: CallbackQuery, state: FSMContext):
     """Defendant accepting participation"""
     case_number = callback.data.split(":")[1]
-
     case = await db.get_case_by_number(case_number)
+
     if not case:
         await callback.answer("Case not found", show_alert=True)
         return
 
     if callback.from_user.id == case["plaintiff_id"]:
-        await callback.answer("You cannot be a defendant in your own case", show_alert=True)
+        await callback.answer("⚠️ You cannot be a defendant in your own case", show_alert=True)
         return
 
     await db.set_defendant(
@@ -692,37 +695,39 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
         callback.from_user.username or callback.from_user.full_name
     )
 
-    await callback.answer("You have been accepted as defendant!")
+    await callback.answer(f"✅ You have joined Case #{case_number} as the Defendant!")
 
-    # Notify plaintiff
     try:
         await callback.bot.send_message(
             case["plaintiff_id"],
-            f"@{callback.from_user.username or callback.from_user.full_name} has accepted participation in case #{case_number}!\n\n"
-            f"Starting argumentation phase."
+            f"✅ @{callback.from_user.username or callback.from_user.full_name} has joined the Case!\n\n"
+            f"Starting the argumentation phase. 🏁\n\n",
+            parse_mode=ParseMode.HTML
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Error notifying plaintiff: {e}")
 
     # Notify group
     if case.get("chat_id"):
         try:
             await callback.bot.send_message(
                 case["chat_id"],
-                f"Defendant @{callback.from_user.username or callback.from_user.full_name} has joined case #{case_number}"
+                f"✅ Defendant @{callback.from_user.username or callback.from_user.full_name} has joined Case #{case_number}\n\n"
+                f"Starting the argumentation phase. 🏁"
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Error notifying group: {e}")
 
     await db.update_case_stage(case_number, "plaintiff_arguments")
 
     await callback.message.answer(
-        f"Case #{case_number}\n"
+        f"📋 Case #{case_number}\n"
         f"Topic: {case['topic']}\n\n"
-        f"Currently at plaintiff's argumentation stage.\n"
-        f"You will be notified when it's your turn."
+        f"⏳ Status: Plaintiff is presenting arguments.\n\n"
+        f"The Plaintiff is currently presenting their arguments. You will be notified when it is your turn to speak.\n\n"
     )
 
+    # Start plaintiff arguments
     kb_plaintiff = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="✅ Finish arguments")],
@@ -747,21 +752,21 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.bot.send_message(
             case["plaintiff_id"],
-            "<b>Present your arguments</b>\n\n"
+            "📝 <b>Present your arguments:</b>\n\n"
             "You can send:\n"
             "• Text messages\n"
             "• Photos and videos\n"
             "• Documents\n\n"
-            "When finished, press «✅ Finish arguments».",
+            "When you are done, tap «✅ Finish arguments».",
             reply_markup=kb_plaintiff,
             parse_mode=ParseMode.HTML
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Error sending plaintiff instructions: {e}")
 
 
 @router.callback_query(F.data.startswith("reject_defendant:"))
-async def reject_defendant(callback: CallbackQuery):
+async def reject_defendant(callback: CallbackQuery, state: FSMContext):
     """Defendant rejecting participation"""
     case_number = callback.data.split(":")[1]
 
@@ -770,20 +775,58 @@ async def reject_defendant(callback: CallbackQuery):
         await callback.answer("Case not found", show_alert=True)
         return
 
-    await callback.answer("You have declined participation")
+    await callback.answer(f"❌ You have declined to participate in Case #{case_number}")
+
+    plaintiff_state = FSMContext(
+        storage=state.storage,
+        key=StorageKey(
+            bot_id=(await callback.bot.get_me()).id,
+            chat_id=case["plaintiff_id"],
+            user_id=case["plaintiff_id"]
+        )
+    )
 
     try:
         await callback.bot.send_message(
             case["plaintiff_id"],
-            f"@{callback.from_user.username or callback.from_user.full_name} has declined participation in case #{case_number}.\n\n"
-            f"You can invite another defendant."
+            f"❌ @{callback.from_user.username or callback.from_user.full_name} has declined participation in Case #{case_number}.\n\n"
+            f"You can invite another defendant.",
+            parse_mode=ParseMode.HTML
         )
-    except:
-        pass
 
-    kb = get_main_menu_keyboard()
+        # Возвращаем истца в состояние ожидания ввода username ответчика
+        await plaintiff_state.set_state(DisputeState.waiting_defendant_username)
+        await plaintiff_state.update_data(case_number=case_number)
+
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="🔙 Back to Menu")]
+            ],
+            resize_keyboard=True
+        )
+
+        await callback.bot.send_message(
+            case["plaintiff_id"],
+            f"👤 <b>Enter a new defendant's username (e.g., @username):</b>",
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        print(f"Error notifying plaintiff about rejection: {e}")
+
     await callback.message.edit_text(
-        f"You have declined participation in case #{case_number}."
+        f"❌ You have declined to participate in Case #{case_number}."
+    )
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🔙 Back to Menu")]
+        ],
+        resize_keyboard=True
+    )
+    # Отправляем главное меню ответчику
+    await callback.message.answer(
+        "You can use the bot for other purposes:",
+        reply_markup=kb
     )
 
 
@@ -812,9 +855,10 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         defendant_id = case.get("defendant_id")
 
         if not defendant_id:
-            await message.answer("Defendant has not yet accepted participation.")
+            await message.answer("⚠️ Defendant has not yet accepted participation.")
             return
 
+        # Notify defendant to start
         kb_defendant = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✅ Finish arguments")],
@@ -839,36 +883,39 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         try:
             await message.bot.send_message(
                 defendant_id,
-                f"<b>Case #{case_number}</b>\n\n"
-                f"It's your turn to present arguments.\n\n"
+                f"📋 Case #{case_number}\n\n"
+                f"🎯 <b>It's your turn to present arguments.</b>\n\n"
                 f"You can send:\n"
                 f"• Text messages\n"
                 f"• Photos and videos\n"
                 f"• Documents\n\n"
-                f"When finished, press «✅ Finish arguments».",
+                f"When finished, tap <b>«✅ Finish arguments».</b>",
                 reply_markup=kb_defendant,
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            await message.answer(f"Could not notify defendant: {e}")
+            await message.answer(f"⚠️ Could not notify defendant: {e}")
 
+        # Notify group
         if case.get("chat_id"):
             try:
                 await message.bot.send_message(
                     case["chat_id"],
-                    f"Case #{case_number}\n"
-                    f"Plaintiff has finished presenting arguments.\n"
-                    f"Waiting for defendant's arguments."
+                    f"📋 ⚖️ Update on Case #{case_number}\n"
+                    f"✅ Plaintiff has submitted their arguments.\n"
+                    f"⏳ Waiting for the defendant's arguments..."
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"Error notifying group: {e}")
 
-        kb = get_main_menu_keyboard()
+        kb = get_back_to_menu_keyboard()
         await message.answer(
-            "Your arguments have been saved!\n\n"
-            "Waiting for defendant's arguments...",
-            reply_markup=kb
+            "✅ <b>Your arguments have been saved!</b>\n\n"
+            "⏳ Waiting for the defendant's arguments...\n\n",
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
         )
+
         await state.clear()
         return
 
@@ -885,7 +932,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
             message.text,
             None
         )
-        await message.answer("Argument added. Continue or press «✅ Finish arguments».")
+        await message.answer("✅ Argument added. Continue adding details or tap ✅ Finish Arguments", parse_mode=ParseMode.HTML)
 
     elif message.photo:
         file_id = message.photo[-1].file_id
@@ -897,7 +944,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
             message.caption or "Photo",
             file_id
         )
-        await message.answer("Photo added as evidence.")
+        await message.answer("✅ Photo added as evidence.")
 
     elif message.document:
         file_id = message.document.file_id
@@ -909,7 +956,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
             message.caption or "Document",
             file_id
         )
-        await message.answer("Document added as evidence.")
+        await message.answer("✅ Document added as evidence.")
 
     elif message.video:
         file_id = message.video.file_id
@@ -921,7 +968,7 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
             message.caption or "Video",
             file_id
         )
-        await message.answer("Video added as evidence.")
+        await message.answer("✅ Video added as evidence.")
 
 
 # =============================================================================
@@ -943,9 +990,51 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
         data = await state.get_data()
         case_number = data.get("case_number")
 
+        # Notify both parties that argumentation is complete
+        case = await db.get_case_by_number(case_number)
+
+        kb = get_back_to_menu_keyboard()
+
+        # Notify plaintiff
+        try:
+            await message.bot.send_message(
+                case["plaintiff_id"],
+                f"✅ <b>Both sides have finished presenting arguments!</b>\n\n"
+                f"📋 Case #{case_number}\n\n"
+                f"🤖 The AI Judge will now review all evidence and may ask clarifying questions.\n\n"
+                f"⏳ Please wait...",
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            print(f"Error notifying plaintiff: {e}")
+
+        # Notify defendant
+        await message.answer(
+            f"✅ <b>Your arguments have been saved!</b>\n\n"
+            f"🤖 The AI Judge will now review all evidence and may ask clarifying questions.\n\n"
+            f"⏳ Please wait...",
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML
+        )
+
+        # Notify group
+        if case.get("chat_id"):
+            try:
+                await message.bot.send_message(
+                    case["chat_id"],
+                    f"📋 Case #{case_number}\n"
+                    f"✅ Both sides have finished presenting arguments.\n"
+                    f"🤖 AI Judge is reviewing the case..."
+                )
+            except Exception as e:
+                print(f"Error notifying group: {e}")
+
+        # Start AI questions
         await check_and_ask_ai_questions(message, state, case_number, "plaintiff")
         return
 
+    # Save argument
     data = await state.get_data()
     case_number = data.get("case_number")
 
@@ -958,7 +1047,7 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
             message.text,
             None
         )
-        await message.answer("Argument added. Continue or press «✅ Finish arguments».")
+        await message.answer("✅ Argument added. Continue or tap <b>«✅ Finish arguments».</b>", parse_mode=ParseMode.HTML)
 
     elif message.photo:
         file_id = message.photo[-1].file_id
@@ -970,7 +1059,7 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
             message.caption or "Photo",
             file_id
         )
-        await message.answer("Photo added as evidence.")
+        await message.answer("✅ Photo added as evidence.")
 
     elif message.document:
         file_id = message.document.file_id
@@ -982,7 +1071,7 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
             message.caption or "Document",
             file_id
         )
-        await message.answer("Document added as evidence.")
+        await message.answer("✅ Document added as evidence.")
 
     elif message.video:
         file_id = message.video.file_id
@@ -994,8 +1083,7 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
             message.caption or "Video",
             file_id
         )
-        await message.answer("Video added as evidence.")
-
+        await message.answer("✅ Video added as evidence.")
 
 # =============================================================================
 # AI QUESTIONS
@@ -1069,7 +1157,7 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
 
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Skip question")],
+            [KeyboardButton(text="⏩ Skip question")],
             [KeyboardButton(text="🔙 Back to Menu")]
         ],
         resize_keyboard=True
@@ -1080,8 +1168,8 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
     try:
         await message.bot.send_message(
             target_user_id,
-            f"<b>AI judge is asking clarifying questions</b>\n\n"
-            f"<b>{role_text}</b>, please answer the question:\n\n"
+            f"<b>🤖 The AI Judge has clarifying questions.</b>\n\n"
+            f"<b>{role_text}</b>, please answer:\n\n"
             f"? {ai_questions[0]}\n\n"
             f"Question 1 of {len(ai_questions)}",
             reply_markup=kb,
@@ -1095,7 +1183,7 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
             await message.bot.send_message(
                 case["chat_id"],
                 f"Case #{case_number}\n"
-                f"AI judge is asking additional questions to the {role_text.lower()}."
+                f"✅ AI judge is asking additional questions to the {role_text.lower()}."
             )
         except:
             pass
@@ -1121,12 +1209,12 @@ async def handle_ai_question_response(message: types.Message, state: FSMContext)
         await state.clear()
         return
 
-    if message.text == "Skip question":
+    if message.text == "⏩ Skip question":
         skip_count += 1
         await state.update_data(skip_count=skip_count)
 
         if skip_count >= 3:
-            await message.answer("Too many skips. Moving on.")
+            await message.answer("⚠️ Too many skips. Moving on to the next stage.")
             await finish_ai_questions(message, state, case_number, answering_role)
             return
     else:
@@ -1156,15 +1244,25 @@ async def handle_ai_question_response(message: types.Message, state: FSMContext)
 
     if next_index < len(ai_questions):
         role_text = "Plaintiff" if answering_role == "plaintiff" else "Defendant"
+
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="⏩ Skip question")],
+                [KeyboardButton(text="🔙 Back to Menu")]
+            ],
+            resize_keyboard=True
+        )
+
         await message.answer(
-            f"Answer accepted.\n\n"
+            f"✅ Answer recorded.\n\n"
             f"<b>{role_text}</b>, next question:\n\n"
-            f"? {ai_questions[next_index]}\n\n"
+            f"❓ {ai_questions[next_index]}\n\n"
             f"Question {next_index + 1} of {len(ai_questions)}",
+            reply_markup=kb,
             parse_mode=ParseMode.HTML
         )
     else:
-        await message.answer("All questions answered!")
+        await message.answer("✅ All questions answered!")
         await finish_ai_questions(message, state, case_number, answering_role)
 
 
@@ -1206,7 +1304,7 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
 
     case = await db.get_case_by_number(case_number)
     if not case:
-        await message.answer("Error: case not found.")
+        await message.answer("⚠️ Error: case not found.")
         return
 
     participants = await db.list_participants(case["id"])
@@ -1237,8 +1335,8 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
             reply_markup=ReplyKeyboardRemove(),
             parse_mode=ParseMode.HTML
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Error notifying plaintiff: {e}")
 
     if defendant_id:
         try:
@@ -1249,8 +1347,8 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
                 reply_markup=ReplyKeyboardRemove(),
                 parse_mode=ParseMode.HTML
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Error notifying defendant: {e}")
 
     try:
         decision = await gemini_service.generate_full_decision(
@@ -1287,7 +1385,7 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
     try:
         await message.bot.send_message(
             plaintiff_id,
-            "✅ <b>Case closed!</b>\n\n"
+            "✅ <b>⚖️ Case Closed</b>\n\n"
             "📄 Here is the final verdict:",
             parse_mode=ParseMode.HTML
         )
@@ -1310,7 +1408,7 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
         try:
             await message.bot.send_message(
                 defendant_id,
-                "✅ <b>Case closed!</b>\n\n"
+                "✅ <b>⚖️ Case Closed</b>\n\n"
                 "📄 Here is the final verdict:",
                 parse_mode=ParseMode.HTML
             )
@@ -1351,20 +1449,26 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
             claim_amount = case.get("claim_amount", 0)
 
             verdict_details = ""
-            if amount_awarded > 0:
-                if claim_amount and amount_awarded < claim_amount:
-                    verdict_details = f"\n💰 Awarded: {amount_awarded} ETF (partial satisfaction out of {claim_amount} ETF)"
-                else:
-                    verdict_details = f"\n💰 Awarded: {amount_awarded} ETF"
+            if amount_awarded and amount_awarded > 0:
+                try:
+                    amount_text = f"{float(amount_awarded):,.2f}"
+                    if claim_amount and float(amount_awarded) < float(claim_amount):
+                        claim_text = f"{float(claim_amount):,.2f}"
+                        verdict_details = f"\n💰 Awarded: {amount_text} USD (partial satisfaction out of {claim_text} USD)"
+                    else:
+                        verdict_details = f"\n💰 Awarded: {amount_text} USD"
+                except (ValueError, TypeError) as e:
+                    print(f"Error formatting amounts: {e}")
+                    verdict_details = f"\n💰 Awarded: {amount_awarded} USD"
 
             group_text = (
-                f"<b>⚖️ VERDICT FOR CASE #{case_number}</b>\n\n"
+                f"<b>⚖️ FINAL VERDICT Case #{case_number}</b>\n\n"
                 f"📝 Topic: {case['topic']}\n"
                 f"👤 Plaintiff: @{plaintiff_username}\n"
                 f"👤 Defendant: @{defendant_username}\n"
                 f"{verdict_details}\n\n"
-                f"{winner_emoji} <b>Decision in favor of:</b>\n{winner_text}\n\n"
-                f"📄 Full document sent to participants in private messages."
+                f"{winner_emoji} <b>Decision ruled in favor of:</b>\n{winner_text}\n\n"
+                f"📄 The full document has been sent to the participants via DM.."
             )
 
             await message.bot.send_message(
@@ -1385,10 +1489,11 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
     if filepath:
         try:
             os.remove(filepath)
-        except:
-            pass
+        except Exception as e:
+            print(f"Error removing PDF file: {e}")
 
     await state.clear()
+
 
 # =============================================================================
 # HELP & AUXILIARY COMMANDS
@@ -1399,23 +1504,23 @@ async def help_command(message: types.Message):
     """Help command"""
     kb = get_back_to_menu_keyboard()
     await message.answer(
-        "<b>How to use the AI Judge:</b>\n\n"
-        "<b>Process:</b>\n"
-        "1. Press «⚖️ Start Case»\n"
-        "2. Choose: with group or without\n"
-        "3. Enter dispute details\n"
-        "4. Invite defendant by username\n"
-        "5. Present arguments\n"
-        "6. Answer AI judge's questions\n"
-        "7. Receive verdict\n\n"
-        "<b>Features:</b>\n"
-        "• Entire process in private messages\n"
-        "• If group selected — only the verdict is sent there\n"
-        "• Can work completely without a group\n\n"
-        "<b>Evidence:</b>\n"
+        "<b>📖 How AI Judge Works:</b>\n\n"
+        "<b>The Process: :</b>\n"
+        "1️⃣ Tap Open New Case.\n"
+        "2️⃣ Choose a mode: with a group chat or private. \n"
+        "3️⃣ Describe the dispute details. \n"
+        "4️⃣ Invite the Defendant via username. \n"
+        "5️⃣ Present your arguments\n"
+        "6️⃣ Answer the AI Judge's clarifying questions.\n"
+        "7️⃣ Get the Verdict.\n\n"
+        "<b>Key Features: </b>\n"
+        "• Privacy: The investigation happens strictly in DMs. \n"
+        "• Group Integration: If linked to a group, we only post the final Verdict there. \n"
+        "• Solo Mode: You can run the entire process privately without a group.\n\n"
+        "<b>Accepted Evidence:</b>\n"
         "• Text messages\n"
-        "• Forwarded messages\n"
-        "• Photos, videos, documents",
+        "• Forwarded chats\n"
+        "• Photos, videos, and documents",
         parse_mode=ParseMode.HTML,
         reply_markup=kb
     )
@@ -1450,7 +1555,7 @@ async def build_cases_text(user_cases, user_id, page: int):
     for case in page_cases:
         role = "Plaintiff" if case["plaintiff_id"] == user_id else "Defendant"
         status = "In progress" if case["status"] != "finished" else "Completed"
-        claim_text = f" ({case['claim_amount']} ETF)" if case.get("claim_amount") else ""
+        claim_text = f" ({case['claim_amount']} USD)" if case.get("claim_amount") else ""
         text += (
             f"<b>Case {case['case_number']}</b>\n"
             f"Topic: {case['topic']}{claim_text}\n"
@@ -1469,9 +1574,9 @@ def build_pagination_keyboard(page: int, total: int):
     buttons = []
 
     if page > 0:
-        buttons.append(types.InlineKeyboardButton(text="Previous", callback_data=f"cases_page:{page - 1}"))
+        buttons.append(types.InlineKeyboardButton(text="⬅️ Previous", callback_data=f"cases_page:{page - 1}"))
     if page < max_page:
-        buttons.append(types.InlineKeyboardButton(text="Next", callback_data=f"cases_page:{page + 1}"))
+        buttons.append(types.InlineKeyboardButton(text="Next ➡", callback_data=f"cases_page:{page + 1}"))
 
     if buttons:
         builder.row(*buttons)
@@ -1666,7 +1771,7 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
 
     # Only plaintiff can pause the case
     if message.from_user.id != case["plaintiff_id"]:
-        await message.answer("Only the plaintiff can pause the case.")
+        await message.answer("⚠️ Only the plaintiff can pause the case.")
         return
 
     await db.update_case_status(case_number, status="paused")
@@ -1681,8 +1786,8 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
     )
 
     await message.answer(
-        f"<b>Case #{case_number} has been paused</b>\n\n"
-        f"To resume, press «⏩ Resume case»",
+        f"<b>⏸️ Case #{case_number} has been paused</b>\n\n"
+        f"To resume, tap <b>«⏩ Resume case»</b>",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
@@ -1692,21 +1797,22 @@ async def pause_case_handler(message: types.Message, state: FSMContext):
         try:
             await message.bot.send_message(
                 case["defendant_id"],
-                f"Case #{case_number} has been paused by the plaintiff.\n"
-                f"Please wait for resumption."
+                f"⏸️ Case #{case_number} has been paused by the plaintiff.\n"
+                f"Please wait for resumption.",
+                parse_mode=ParseMode.HTML
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Error notifying defendant: {e}")
 
     # Notify group
     if case.get("chat_id"):
         try:
             await message.bot.send_message(
                 case["chat_id"],
-                f"Case #{case_number} has been paused."
+                f"⏸️ Case #{case_number} has been paused."
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Error notifying group: {e}")
 
 
 @router.message(F.text == "⏩ Resume case")
@@ -1722,7 +1828,7 @@ async def continue_case_handler(message: types.Message, state: FSMContext):
     case = await db.get_case_by_number(case_number)
 
     if case.get("status") != "paused":
-        await message.answer("The case is not paused.")
+        await message.answer("⚠️ The case is not paused.")
         return
 
     await db.update_case_status(case_number, status="active")
@@ -1741,7 +1847,7 @@ async def continue_case_handler(message: types.Message, state: FSMContext):
             resize_keyboard=True
         )
         await message.answer(
-            f"Case #{case_number} resumed!\n\n"
+            f"▶️ Case #{case_number} resumed!\n\n"
             f"Continue presenting arguments.",
             reply_markup=kb
         )
@@ -1751,12 +1857,13 @@ async def continue_case_handler(message: types.Message, state: FSMContext):
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✅ Finish arguments")],
+                [KeyboardButton(text="⛔ Pause case")],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True
         )
         await message.answer(
-            f"Case #{case_number} resumed!\n\n"
+            f"▶️ Case #{case_number} resumed!\n\n"
             f"Continue presenting arguments.",
             reply_markup=kb
         )
@@ -1766,18 +1873,20 @@ async def continue_case_handler(message: types.Message, state: FSMContext):
         try:
             await message.bot.send_message(
                 case["chat_id"],
-                f"Case #{case_number} has been resumed."
+                f"▶️ Case #{case_number} has been resumed."
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Error notifying group: {e}")
 
 
 @router.message(DisputeState.case_paused)
 async def handle_paused_messages(message: types.Message):
     """Block messages while case is paused"""
     if message.text not in ["⏩ Resume case", "🔙 Back to Menu"]:
-        await message.answer("Case is paused. Press «⏩ Resume case» to continue.")
-
+        await message.answer(
+            "⏸️ Case is paused. Tap <b>«⏩ Resume case»</b> to continue.",
+            parse_mode=ParseMode.HTML
+        )
 
 # =============================================================================
 # UNKNOWN MESSAGE HANDLER

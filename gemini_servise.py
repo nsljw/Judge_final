@@ -41,6 +41,7 @@ class GeminiService:
         - Avoid overly general or philosophical questions (e.g., "Why do you think you're right?")
         - Maximum 3 questions at a time
         - If there is sufficient information to make a decision, return an empty array []
+        - Pay special attention to chat history provided as evidence
 
         Criteria for questions:
         1. Specification of details (exact dates, amounts, locations, participants, actions).
@@ -48,12 +49,14 @@ class GeminiService:
         3. Clarification of relationships between events and evidence.
         4. Identification of weak points or contradictions in the {"plaintiff's" if current_role == "plaintiff" else "defendant's"} position.
         5. Focus on facts that directly affect the case outcome (not secondary details).
+        6. Reference to specific messages from chat history if provided.
 
         Examples of question style:
         - "Please specify on what exact day the event occurred?"
         - "Who was present at the signing of the contract?"
         - "What confirms the amount you are claiming?"
         - "Why do your documents show different dates?"
+        - "In the chat history from [date], you mentioned X. Can you clarify this?"
 
         Return JSON in the format:
         {{
@@ -152,11 +155,24 @@ class GeminiService:
         "The plaintiff filed a claim for the amount of {claim_amount_text}..."
         Even if the claim is rejected — still write the original amount.
 
-        Consider the provided material evidence, including images, documents, and chat history.
+        Consider ALL provided material evidence, including:
+        - Images and documents
+        - Chat history (EXTREMELY IMPORTANT - analyze the chronology, context, and content of messages)
+        - Text arguments
+        - Answers to AI questions
 
-        Pay special attention to:
+        Pay SPECIAL attention to:
+        - Chat correspondence (type 'chat_history') — this is PRIMARY evidence showing actual communication between parties
         - Answers to AI questions (type 'ai_response')
-        - Chat correspondence (type 'chat_history') — analyze chronology and context
+        - The chronology of events as shown in chat messages
+        - Contradictions or confirmations between chat history and other evidence
+
+        CHAT HISTORY ANALYSIS REQUIREMENTS:
+        1. Carefully read all forwarded messages with dates and authors
+        2. Identify key statements, agreements, or disputes in the chat
+        3. Note any contradictions between chat history and parties' claims
+        4. Use specific quotes from chat messages in your reasoning
+        5. Consider the timeline of events as shown in messages
 
         ALL TEXT MUST BE IN ENGLISH.
 
@@ -164,14 +180,14 @@ class GeminiService:
         {{
           "established_facts": [...],
           "violations": [...],
-          "decision": "Full verdict text IN ENGLISH, mentioning the claim amount {claim_amount_text}",
+          "decision": "Full verdict text IN ENGLISH, mentioning the claim amount {claim_amount_text} and referencing specific chat messages if relevant",
           "verdict": {{
               "claim_satisfied": true/false,
               "amount_awarded": number,
               "court_costs": number
           }},
           "winner": "plaintiff" | "defendant" | "draw",
-          "reasoning": "Detailed reasoning IN ENGLISH..."
+          "reasoning": "Detailed reasoning IN ENGLISH with specific references to chat history..."
         }}"""
 
         if no_evidence:
@@ -180,16 +196,16 @@ class GeminiService:
         instruction += """
     Return JSON strictly in the format (ALL TEXT IN ENGLISH):
     {
-      "established_facts": ["fact1", "fact2"],
+      "established_facts": ["fact1 (supported by chat message from [date])", "fact2"],
       "violations": ["violation1", "violation2"],
-      "decision": "Text of the final decision IN ENGLISH",
+      "decision": "Text of the final decision IN ENGLISH with references to chat evidence",
       "verdict": {
           "claim_satisfied": true/false,
           "amount_awarded": number (amount awarded to plaintiff),
           "court_costs": number
       },
       "winner": "plaintiff" or "defendant" or "draw",
-      "reasoning": "Detailed reasoning for the decision IN ENGLISH"
+      "reasoning": "Detailed reasoning IN ENGLISH citing specific chat messages and their dates"
     }
 
     IMPORTANT about the "winner" field:
@@ -197,7 +213,10 @@ class GeminiService:
     - "defendant" - if the decision is in favor of the defendant (claim denied)
     - "draw" - if both parties are partially right (compromise decision)
 
-    REMEMBER: All text content must be in English language.
+    REMEMBER: 
+    - All text content must be in English language
+    - Chat history is PRIMARY evidence and must be thoroughly analyzed
+    - Reference specific messages from chat history in your reasoning
     """
 
         messages = await self._build_multimodal_prompt(
@@ -225,7 +244,7 @@ class GeminiService:
                     "amount_awarded": 0,
                     "court_costs": 0
                 },
-                "winner": "defendant",  # Default on error
+                "winner": "defendant",
                 "reasoning": ""
             }
 
@@ -238,15 +257,10 @@ class GeminiService:
         claim_satisfied = verdict.get('claim_satisfied', False)
         amount_awarded = verdict.get('amount_awarded', 0)
 
-        # If claim is satisfied and amount is awarded
         if claim_satisfied and amount_awarded > 0:
             return "plaintiff"
-
-        # If claim is satisfied but no amount (non-monetary claim)
         elif claim_satisfied:
             return "plaintiff"
-
-        # If claim is not satisfied
         else:
             return "defendant"
 
@@ -325,9 +339,13 @@ class GeminiService:
             claim_text = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.') + " ETF"
             if claim_text.endswith('.'):
                 claim_text = claim_text[:-1] + " ETF"
+
+        # Separate chat history from other evidence
+        chat_history = [ev for ev in evidence if ev.get("type") == "chat_history"]
+        other_evidence = [ev for ev in evidence if ev.get("type") != "chat_history"]
+
         base_prompt = f"""
     {task_instruction}
-
 
     Case number: {case_data.get('case_number')}
     Subject of dispute: {case_data.get('topic')}
@@ -337,12 +355,36 @@ class GeminiService:
 
     Participants:
     {self._format_participants(participants)}
-
-    Evidence and arguments:
     """
+
         messages: List[Union[str, Dict]] = [base_prompt]
 
-        for i, ev in enumerate(evidence, 1):
+        # Add chat history first with special emphasis
+        if chat_history:
+            messages.append("\n" + "=" * 80 + "\n")
+            messages.append("🔴 CRITICAL EVIDENCE: CHAT HISTORY (PRIMARY SOURCE)\n")
+            messages.append("=" * 80 + "\n")
+            messages.append("This is actual communication between the parties. Analyze carefully:\n\n")
+
+            for i, ev in enumerate(chat_history, 1):
+                role_text = "Plaintiff" if ev.get("role") == "plaintiff" else "Defendant"
+                content = ev.get('content', ev.get('description', ''))
+                messages.append(
+                    f"\n📱 CHAT HISTORY #{i} (Provided by {role_text}):\n"
+                    f"{'-' * 80}\n"
+                    f"{content}\n"
+                    f"{'-' * 80}\n"
+                    f"[This chat correspondence is PRIMARY EVIDENCE. Extract key facts, dates, agreements, and disputes from these messages.]\n\n"
+                )
+
+            messages.append("=" * 80 + "\n")
+            messages.append("END OF CHAT HISTORY\n")
+            messages.append("=" * 80 + "\n\n")
+
+        # Then add other evidence
+        messages.append("Additional Evidence and Arguments:\n\n")
+
+        for i, ev in enumerate(other_evidence, 1):
             role_text = "Plaintiff" if ev.get("role") == "plaintiff" else "Defendant"
 
             if ev["type"] == "text":
@@ -352,26 +394,16 @@ class GeminiService:
                 messages.append(
                     f"\n{i}. {role_text} - Answer to AI question:\n{ev.get('content', ev.get('description', ''))}\n")
 
-            elif ev["type"] == "chat_history":
-                # Chat history - important evidence
-                messages.append(
-                    f"\n{i}. {role_text} - Chat history:\n{ev.get('content', ev.get('description', ''))}\n"
-                    f"[IMPORTANT: This is chat correspondence, analyze context and chronology of messages]\n")
-
             elif ev["type"] == "photo" and bot and ev.get("file_path"):
                 try:
                     file_bytes = await self._download_telegram_file(bot, ev["file_path"])
                     if file_bytes:
-                        # Try to determine image MIME type
                         mime_type = "image/jpeg"
                         if len(file_bytes) >= 4:
-                            # PNG signature
                             if file_bytes[:4] == b'\x89PNG':
                                 mime_type = "image/png"
-                            # WEBP signature
                             elif file_bytes[:4] == b'RIFF' and file_bytes[8:12] == b'WEBP':
                                 mime_type = "image/webp"
-                            # GIF signature
                             elif file_bytes[:3] == b'GIF':
                                 mime_type = "image/gif"
 
@@ -397,7 +429,6 @@ class GeminiService:
                             filename = "document"
 
                         if self._is_image(filename):
-                            # Determine MIME type for image-documents
                             mime_type = "image/jpeg"
                             if filename.lower().endswith('.png'):
                                 mime_type = "image/png"
