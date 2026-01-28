@@ -39,19 +39,22 @@ class Database:
                 )
             ''')
             await conn.execute('''
-            CREATE TABLE IF NOT EXISTS evidence (
-                id SERIAL PRIMARY KEY,
-                case_id INTEGER REFERENCES cases(id) ON DELETE CASCADE,
-                user_id BIGINT,
-                role VARCHAR(50),
-                type VARCHAR(50),
-                content TEXT,
-                file_id VARCHAR(500),
-                created_at TIMESTAMP DEFAULT NOW(),
-                round_number INTEGER DEFAULT 0,
-                question_id INTEGER
+                CREATE TABLE IF NOT EXISTS evidence (
+                    id BIGSERIAL PRIMARY KEY,
+                    case_number VARCHAR(50),
+                    user_id BIGINT,
+                    role VARCHAR(50),
+                    type VARCHAR(50),
+                    content TEXT,
+                    file_id VARCHAR(500),
+                    file_path TEXT,
+                    description TEXT,
+                    round_number INTEGER DEFAULT 0,
+                    question_id INTEGER,
+                    created_at TIMESTAMP DEFAULT NOW()
                 )
-            ''')
+                ''')
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS participants (
                     id SERIAL PRIMARY KEY,
@@ -67,6 +70,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS decisions (
                     id SERIAL PRIMARY KEY,
                     case_number VARCHAR(50) UNIQUE,
+                    claim_granted BOOLEAN NOT NULL DEFAULT FALSE,
                     file_path TEXT,
                     file_data BYTEA,
                     created_at TIMESTAMP DEFAULT NOW()
@@ -143,6 +147,7 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             ''')
+
 
     async def create_case(
             self,
@@ -396,35 +401,73 @@ class Database:
             '''
             await conn.execute(query, case_number, *values)
 
-    async def add_evidence(self, case_number: str, user_id: int, role: str, ev_type: str, content: Optional[str],
-                           file_id: Optional[str]):
+    async def add_evidence(
+            self,
+            case_number: str,
+            user_id: int,
+            role: str,
+            ev_type: str,
+            content: Optional[str],
+            file_id: Optional[str]
+    ):
         async with self.pool.acquire() as conn:
-            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number = $1', case_number)
-            if not case_id:
+            exists = await conn.fetchval(
+                'SELECT 1 FROM cases WHERE case_number = $1',
+                case_number
+            )
+            if not exists:
                 raise ValueError(f"Дело {case_number} не найдено")
-            await conn.execute('''
-                INSERT INTO evidence (case_id, user_id, role, type, content, file_path)
+
+            await conn.execute(
+                '''
+                INSERT INTO evidence (case_number, user_id, role, type, content, file_path)
                 VALUES ($1, $2, $3, $4, $5, $6)
-            ''', case_id, user_id, role, ev_type, content, file_id)
+                ''',
+                case_number,
+                user_id,
+                role,
+                ev_type,
+                content,
+                file_id
+            )
 
     async def get_case_evidence(self, case_number: str) -> List[Dict]:
         async with self.pool.acquire() as conn:
-            case_id = await conn.fetchval('SELECT id FROM cases WHERE case_number = $1', case_number)
-            if not case_id:
-                return []
-            rows = await conn.fetch('SELECT * FROM evidence WHERE case_id = $1 ORDER BY created_at', case_id)
+            rows = await conn.fetch(
+                '''
+                SELECT *
+                FROM evidence
+                WHERE case_number = $1
+                ORDER BY created_at
+                ''',
+                case_number
+            )
             return [dict(r) for r in rows]
 
-    async def save_decision(self, case_number: str, file_path: str = None, file_data: bytes = None):
+    async def save_decision(
+            self,
+            case_number: str,
+            claim_granted: bool,
+            file_path: str = None,
+            file_data: bytes = None
+    ):
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO decisions (case_number, file_path, file_data, created_at)
-                VALUES ($1, $2, $3, NOW())
+                INSERT INTO decisions (
+                    case_number,
+                    claim_granted,
+                    file_path,
+                    file_data,
+                    created_at
+                )
+                VALUES ($1, $2, $3, $4, NOW())
                 ON CONFLICT (case_number)
-                DO UPDATE SET file_path = EXCLUDED.file_path,
-                              file_data = EXCLUDED.file_data,
-                              created_at = NOW()
-            """, case_number, file_path, file_data)
+                DO UPDATE SET
+                    claim_granted = EXCLUDED.claim_granted,
+                    file_path = EXCLUDED.file_path,
+                    file_data = EXCLUDED.file_data,
+                    created_at = NOW()
+            """, case_number, claim_granted, file_path, file_data)
 
     async def get_decision_file(self, case_number: str):
         async with self.pool.acquire() as conn:

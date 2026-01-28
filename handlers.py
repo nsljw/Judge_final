@@ -1,4 +1,5 @@
 import os
+from typing import Dict
 
 from aiogram import Router, types, F, Dispatcher
 from aiogram.enums import ParseMode
@@ -113,6 +114,9 @@ async def start_command(message: types.Message, state: FSMContext):
         await message.answer(
             "👋 Hi! I am the AI Judge. I help resolve disputes fairly using Artificial Intelligence.\n\n"
             "🔹 To start a case, please switch to a private chat with me:",
+            # f"⚖️ <b>Telegram AI Judge</b>\n"
+            # f"<i>Resolve conflicts fairly with AI-powered arbitration</i>\n\n",
+            disable_web_page_preview=False,
             reply_markup=kb
         )
         return
@@ -201,7 +205,7 @@ async def start_dispute_pm(message: types.Message, state: FSMContext):
         )
         await state.set_state(DisputeState.waiting_topic)
         await message.answer(
-            "Enter the dispute topic:",
+            "📝 Enter the dispute topic:",
             reply_markup=kb
         )
     else:
@@ -384,6 +388,8 @@ async def proceed_to_message_history(message: types.Message, state: FSMContext):
         one_time_keyboard=True
     )
 
+    await state.update_data(forwarded_messages=[], added_message_ids=[])
+
     await state.set_state(DisputeState.waiting_message_history)
     await message.answer(
         "<b>Do you want to add chat history as evidence? </b>\n\n"
@@ -404,6 +410,7 @@ async def handle_message_history_choice(message: types.Message, state: FSMContex
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="⏸ ️Finish adding")],
+                [KeyboardButton(text='⏩ Skip')],
                 [KeyboardButton(text="🔙 Back to Menu")]
             ],
             resize_keyboard=True
@@ -430,42 +437,106 @@ async def handle_forwarded_messages(message: types.Message, state: FSMContext):
         await return_to_main_menu(message, state)
         return
 
-    if message.text == "⏸ ️Finish adding":
+    if message.text == "⏩ Skip":
+        await proceed_to_defendant_selection(message, state)
+        return
+
+    if message.text and ("Finish adding" in message.text):
         data = await state.get_data()
         forwarded_messages = data.get("forwarded_messages", [])
+        case_number = data.get("case_number")
 
-        if forwarded_messages:
-            await message.answer(f"Added {len(forwarded_messages)} messages as evidence.")
+        if forwarded_messages and case_number:
+            chat_history_text = "📱 CHAT HISTORY:\n" + "=" * 50 + "\n\n"
+
+            for idx, msg in enumerate(forwarded_messages, 1):
+                date_str = msg.get('date', 'Unknown date')
+                from_user = msg.get('from_user', 'Unknown')
+                text = msg.get('text', '')
+
+                chat_history_text += f"[{date_str}] @{from_user}:\n{text}\n\n"
+
+            chat_history_text += "=" * 50
+
+            await db.add_evidence(
+                case_number,
+                message.from_user.id,
+                "plaintiff",
+                "chat_history",
+                chat_history_text,
+                None
+            )
+
+            await message.answer(
+                f"✅ Added {len(forwarded_messages)} messages as chat history evidence."
+            )
+
+            await state.update_data(forwarded_messages=[], added_message_ids=[])
+        else:
+            await message.answer("No messages were added to chat history.")
 
         await proceed_to_defendant_selection(message, state)
         return
 
-    if message.forward_from or message.forward_from_chat:
-        data = await state.get_data()
-        forwarded_messages = data.get("forwarded_messages", [])
-        added_message_ids = data.get("added_message_ids", set())
+    data = await state.get_data()
+    forwarded_messages = data.get("forwarded_messages", [])
+    added_message_ids = data.get("added_message_ids", [])
 
-        # Ignore already added messages
-        if message.message_id in added_message_ids:
-            return
+    if message.message_id in added_message_ids:
+        return
 
-        # Add message to list
-        forwarded_messages.append({
-            "from_user": message.forward_from.username if message.forward_from else
-            message.forward_from_chat.title if message.forward_from_chat else "Unknown",
-            "text": message.text or message.caption or "(media file)",
-            "date": message.forward_date.isoformat() if message.forward_date else None
-        })
+    from_user = "Unknown"
 
-        added_message_ids.add(message.message_id)
+    if message.forward_from:
+        from_user = message.forward_from.username or message.forward_from.first_name or "Unknown User"
+    elif message.forward_from_chat:
+        from_user = message.forward_from_chat.title or "Unknown Chat"
+    elif message.forward_sender_name:
+        from_user = message.forward_sender_name
+    elif message.text:
+        lines = message.text.split('\n')
+        first_line = lines[0] if lines else ""
 
-        await state.update_data(forwarded_messages=forwarded_messages, added_message_ids=added_message_ids)
+        if ',' in first_line and '[' in first_line:
+            from_user = first_line.split(',')[0].strip()
+        elif len(first_line) < 50 and len(lines) > 1:
+            from_user = first_line.strip()
 
-        if len(forwarded_messages) % 5 == 0:
-            await message.answer(f"Added {len(forwarded_messages)} messages.")
+    text_content = message.text or message.caption or ""
 
-    else:
-        await message.answer("This is not a forwarded message. Use the forward function.")
+    if text_content and '\n' in text_content:
+        lines = text_content.split('\n')
+        if len(lines[0]) < 50 or '[' in lines[0] or ',' in lines[0]:
+            text_content = '\n'.join(lines[1:])
+
+    if message.photo:
+        text_content += " [Photo attached]" if text_content else "[Photo]"
+    elif message.video:
+        text_content += " [Video attached]" if text_content else "[Video]"
+    elif message.document:
+        text_content += " [Document attached]" if text_content else "[Document]"
+    elif message.audio:
+        text_content += " [Audio attached]" if text_content else "[Audio]"
+    elif message.voice:
+        text_content += " [Voice message]" if text_content else "[Voice message]"
+
+    if not text_content or not text_content.strip():
+        text_content = "(empty message)"
+
+    forwarded_messages.append({
+        "from_user": from_user,
+        "text": text_content.strip(),
+        "date": message.forward_date.isoformat() if message.forward_date else message.date.isoformat()
+    })
+    added_message_ids.append(message.message_id)
+
+    await state.update_data(
+        forwarded_messages=forwarded_messages,
+        added_message_ids=added_message_ids
+    )
+
+    if len(forwarded_messages) % 10 == 0:
+        await message.answer(f"✅ Added {len(forwarded_messages)} messages.")
 
 
 # =============================================================================
@@ -520,7 +591,6 @@ async def proceed_to_defendant_selection(message: types.Message, state: FSMConte
         claim_text = "not specified"
     else:
         try:
-            # Форматируем с 2 десятичными знаками
             claim_text = f"{float(raw_amount):,.2f} USD"
         except (ValueError, TypeError):
             claim_text = "not specified"
@@ -561,7 +631,6 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
         bot_username = (await message.bot.get_me()).username
         invite_link = f"https://t.me/{bot_username}?start=defendant_{case_number}"
 
-        # Форматируем сумму иска
         claim_text = "not specified"
         if data.get("claim_amount"):
             try:
@@ -610,7 +679,6 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
             except Exception as e:
                 print(f"Could not send direct message to defendant: {e}")
 
-                # Отправляем ссылку с превью
                 await message.answer(
                     f"Could not send invitation to @{username} directly.\n\n"
                     f"The user may have blocked the bot or not started a chat.\n\n"
@@ -637,7 +705,6 @@ async def input_defendant_username(message: types.Message, state: FSMContext):
                 disable_web_page_preview=False
             )
 
-        # Notify group if linked
         chat_id = data.get("chat_id")
         if chat_id:
             try:
@@ -727,7 +794,6 @@ async def accept_defendant(callback: CallbackQuery, state: FSMContext):
         f"The Plaintiff is currently presenting their arguments. You will be notified when it is your turn to speak.\n\n"
     )
 
-    # Start plaintiff arguments
     kb_plaintiff = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="✅ Finish arguments")],
@@ -794,7 +860,6 @@ async def reject_defendant(callback: CallbackQuery, state: FSMContext):
             parse_mode=ParseMode.HTML
         )
 
-        # Возвращаем истца в состояние ожидания ввода username ответчика
         await plaintiff_state.set_state(DisputeState.waiting_defendant_username)
         await plaintiff_state.update_data(case_number=case_number)
 
@@ -823,7 +888,6 @@ async def reject_defendant(callback: CallbackQuery, state: FSMContext):
         ],
         resize_keyboard=True
     )
-    # Отправляем главное меню ответчику
     await callback.message.answer(
         "You can use the bot for other purposes:",
         reply_markup=kb
@@ -858,7 +922,6 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
             await message.answer("⚠️ Defendant has not yet accepted participation.")
             return
 
-        # Notify defendant to start
         kb_defendant = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="✅ Finish arguments")],
@@ -896,7 +959,6 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         except Exception as e:
             await message.answer(f"⚠️ Could not notify defendant: {e}")
 
-        # Notify group
         if case.get("chat_id"):
             try:
                 await message.bot.send_message(
@@ -919,7 +981,6 @@ async def plaintiff_arguments_handler(message: types.Message, state: FSMContext)
         await state.clear()
         return
 
-    # Save argument
     data = await state.get_data()
     case_number = data.get("case_number")
 
@@ -1297,14 +1358,16 @@ async def finish_ai_questions(message: types.Message, state: FSMContext, case_nu
 # FINAL VERDICT
 # =============================================================================
 
-async def generate_final_verdict(message: types.Message, state: FSMContext, case_number: str):
-    """Generate final verdict"""
-    await db.update_case_stage(case_number, "final_decision")
-    await db.update_case_status(case_number, "finished")
+async def generate_final_verdict(
+    message: types.Message,
+    state: FSMContext,
+    case_number: str,
+):
+    """Generate final verdict and notify all parties"""
 
     case = await db.get_case_by_number(case_number)
     if not case:
-        await message.answer("⚠️ Error: case not found.")
+        await message.answer("⚠️ Case not found.")
         return
 
     participants = await db.list_participants(case["id"])
@@ -1327,170 +1390,126 @@ async def generate_final_verdict(message: types.Message, state: FSMContext, case
     plaintiff_id = case["plaintiff_id"]
     defendant_id = case.get("defendant_id")
 
-    try:
-        await message.bot.send_message(
-            plaintiff_id,
-            "<b>⚖️ AI judge is analyzing the case and rendering a decision...</b>\n\n"
-            "⏳ Please wait, this may take a moment...",
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode=ParseMode.HTML
-        )
-    except Exception as e:
-        print(f"Error notifying plaintiff: {e}")
-
-    if defendant_id:
+    for user_id in filter(None, [plaintiff_id, defendant_id]):
         try:
             await message.bot.send_message(
-                defendant_id,
+                user_id,
                 "<b>⚖️ AI judge is analyzing the case and rendering a decision...</b>\n\n"
                 "⏳ Please wait, this may take a moment...",
-                reply_markup=ReplyKeyboardRemove(),
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            print(f"Error notifying defendant: {e}")
+            print(f"Notify error ({user_id}): {e}")
 
     try:
         decision = await gemini_service.generate_full_decision(
-            case, participants_info, evidence_info, bot=message.bot
+            case,
+            participants_info,
+            evidence_info,
+            bot=message.bot
         )
-        if not decision:
-            decision = {
-                "decision": "Decision was not generated.",
-                "winner": "defendant",
-                "verdict": {"claim_satisfied": False, "amount_awarded": 0},
-                "reasoning": ""
-            }
     except Exception as e:
-        print(f"Error generating decision: {e}")
+        print(f"Decision generation failed: {e}")
         decision = {
-            "decision": "Technical error while rendering decision.",
+            "decision": "Technical error during decision generation.",
             "winner": "defendant",
-            "verdict": {"claim_satisfied": False, "amount_awarded": 0},
-            "reasoning": ""
+            "verdict": {
+                "claim_granted": False,
+                "amount_awarded": 0,
+                "court_costs": 0
+            },
+            "reasoning": str(e)
         }
 
+    verdict = decision.get("verdict", {})
+    claim_granted = verdict.get("claim_granted", False)
+    winner = decision.get("winner", "defendant")
+
+    await db.update_case_stage(case_number, "final_decision")
+    await db.update_case_status(case_number, "finished")
+
     try:
-        pdf_bytes = pdf_generator.generate_verdict_pdf(case, decision, participants_info, evidence_info)
+        pdf_bytes = pdf_generator.generate_verdict_pdf(
+            case,
+            decision,
+            participants_info,
+            evidence_info
+        )
         filepath = f"verdict_{case_number}.pdf"
         with open(filepath, "wb") as f:
             f.write(pdf_bytes)
-        await db.save_decision(case_number=case_number, file_path=filepath)
+
+        await db.save_decision(
+            case_number=case_number,
+            claim_granted=claim_granted,
+            file_path=filepath
+        )
     except Exception as e:
         print(f"PDF generation error: {e}")
         filepath = None
 
     kb = get_main_menu_keyboard()
 
-    try:
-        await message.bot.send_message(
-            plaintiff_id,
-            "✅ <b>⚖️ Case Closed</b>\n\n"
-            "📄 Here is the final verdict:",
-            parse_mode=ParseMode.HTML
-        )
-        if filepath:
-            await message.bot.send_document(
-                plaintiff_id,
-                FSInputFile(filepath),
-                reply_markup=kb
-            )
-        else:
-            await message.bot.send_message(
-                plaintiff_id,
-                "⚠️ Error generating PDF document.",
-                reply_markup=kb
-            )
-    except Exception as e:
-        print(f"Failed to send to plaintiff: {e}")
-
-    if defendant_id:
+    for user_id in filter(None, [plaintiff_id, defendant_id]):
         try:
             await message.bot.send_message(
-                defendant_id,
-                "✅ <b>⚖️ Case Closed</b>\n\n"
-                "📄 Here is the final verdict:",
+                user_id,
+                "✅ <b>⚖️ Case Closed</b>\n\n📄 Here is the final verdict:",
                 parse_mode=ParseMode.HTML
             )
+
             if filepath:
                 await message.bot.send_document(
-                    defendant_id,
+                    user_id,
                     FSInputFile(filepath),
                     reply_markup=kb
                 )
             else:
                 await message.bot.send_message(
-                    defendant_id,
+                    user_id,
                     "⚠️ Error generating PDF document.",
                     reply_markup=kb
                 )
         except Exception as e:
-            print(f"Failed to send to defendant: {e}")
+            print(f"Send verdict error ({user_id}): {e}")
 
-    # Send to group
     if case.get("chat_id"):
         try:
-            winner_code = decision.get("winner", "draw")
-            plaintiff_username = case['plaintiff_username']
-            defendant_username = case.get('defendant_username', 'unknown')
+            case_no = case.get("case_number", case_number)
 
-            if winner_code == "plaintiff":
-                winner_text = f"@{plaintiff_username} (Plaintiff)"
-                winner_emoji = "🏆"
-            elif winner_code == "defendant":
-                winner_text = f"@{defendant_username} (Defendant)"
-                winner_emoji = "🏆"
+            if claim_granted and winner == "plaintiff":
+                group_text = (
+                    "⚖️ Final Verdict: Claim Granted\n"
+                    f"The AI Judge has ruled on Case #{case_no}.\n"
+                    "Decision: The claim has been satisfied. "
+                    "The evidence presented successfully proved the defendant's liability.\n"
+                    "📄 Tap the document below for the full ruling and enforcement details."
+                )
             else:
-                winner_text = "Compromise decision (both sides partially right)"
-                winner_emoji = "⚖️"
+                group_text = (
+                    "⚖️ Final Verdict: Claim Denied\n"
+                    f"The AI Judge has ruled on Case #{case_no}.\n"
+                    "Decision: The claim could not be satisfied due to insufficient evidence. "
+                    "The provided facts did not conclusively prove the defendant's liability.\n"
+                    "📄 Tap the document below for the full reasoning and details."
+                )
 
-            verdict = decision.get("verdict", {})
-            amount_awarded = verdict.get("amount_awarded", 0)
-            claim_amount = case.get("claim_amount", 0)
-
-            verdict_details = ""
-            if amount_awarded and amount_awarded > 0:
-                try:
-                    amount_text = f"{float(amount_awarded):,.2f}"
-                    if claim_amount and float(amount_awarded) < float(claim_amount):
-                        claim_text = f"{float(claim_amount):,.2f}"
-                        verdict_details = f"\n💰 Awarded: {amount_text} USD (partial satisfaction out of {claim_text} USD)"
-                    else:
-                        verdict_details = f"\n💰 Awarded: {amount_text} USD"
-                except (ValueError, TypeError) as e:
-                    print(f"Error formatting amounts: {e}")
-                    verdict_details = f"\n💰 Awarded: {amount_awarded} USD"
-
-            group_text = (
-                f"<b>⚖️ FINAL VERDICT Case #{case_number}</b>\n\n"
-                f"📝 Topic: {case['topic']}\n"
-                f"👤 Plaintiff: @{plaintiff_username}\n"
-                f"👤 Defendant: @{defendant_username}\n"
-                f"{verdict_details}\n\n"
-                f"{winner_emoji} <b>Decision ruled in favor of:</b>\n{winner_text}\n\n"
-                f"📄 The full document has been sent to the participants via DM.."
-            )
-
-            await message.bot.send_message(
-                case["chat_id"],
-                group_text,
-                parse_mode=ParseMode.HTML
-            )
+            await message.bot.send_message(case["chat_id"], group_text)
 
             if filepath:
                 await message.bot.send_document(
                     case["chat_id"],
-                    FSInputFile(filepath),
-                    caption=f"📄 Full verdict for case #{case_number}"
+                    FSInputFile(filepath)
                 )
+
         except Exception as e:
-            print(f"Error sending to group: {e}")
+            print(f"Group send error: {e}")
 
     if filepath:
         try:
             os.remove(filepath)
         except Exception as e:
-            print(f"Error removing PDF file: {e}")
+            print(f"File cleanup error: {e}")
 
     await state.clear()
 
@@ -1705,14 +1724,16 @@ async def media_handler(message: types.Message, state: FSMContext):
     """Handle media files"""
     current_state = await state.get_state()
 
-    if current_state not in (DisputeState.plaintiff_arguments.state, DisputeState.defendant_arguments.state):
+    if current_state not in (DisputeState.plaintiff_arguments.state,
+                             DisputeState.defendant_arguments.state,
+                             DisputeState.waiting_forwarded_messages.state):
         return
 
     data = await state.get_data()
     case_number = data.get("case_number")
 
     if not case_number:
-        await message.answer("Error: case not found.")
+        await message.answer("❌ Error: case not found.")
         return
 
     # Determine sender's role
@@ -1724,33 +1745,54 @@ async def media_handler(message: types.Message, state: FSMContext):
     else:
         return
 
-    # Save media
-    file_info = None
+    # Determine media type and file_id
+    file_id = None
     content_type = None
+    file_description = message.caption or ""
 
     if message.photo:
-        file_info = message.photo[-1].file_id
+        file_id = message.photo[-1].file_id
         content_type = "photo"
+        if not file_description:
+            file_description = "Photo evidence"
     elif message.document:
-        file_info = message.document.file_id
+        file_id = message.document.file_id
         content_type = "document"
+        # Get document filename if available
+        doc_name = message.document.file_name or "document"
+        if not file_description:
+            file_description = f"Document: {doc_name}"
+        else:
+            file_description = f"{file_description} ({doc_name})"
     elif message.video:
-        file_info = message.video.file_id
+        file_id = message.video.file_id
         content_type = "video"
+        if not file_description:
+            file_description = "Video evidence"
     elif message.audio:
-        file_info = message.audio.file_id
+        file_id = message.audio.file_id
         content_type = "audio"
+        if not file_description:
+            file_description = "Audio evidence"
 
-    if file_info:
+    if file_id:
+        # Save to database with file_id (which will be used as file_path)
         await db.add_evidence(
             case_number,
             message.from_user.id,
             role,
             content_type,
-            message.caption or f"File ({content_type})",
-            file_info
+            file_description,
+            file_id  # This is the Telegram file_id
         )
-        await message.answer(f"{content_type.capitalize()} added as evidence.")
+
+        role_text = "Plaintiff" if role == "plaintiff" else "Defendant"
+        await message.answer(
+            f"✅ {content_type.capitalize()} added as evidence for {role_text}.\n"
+            f"Description: {file_description}"
+        )
+    else:
+        await message.answer("❌ Failed to process media file.")
 
 
 # =============================================================================

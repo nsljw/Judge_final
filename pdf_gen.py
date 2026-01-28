@@ -95,8 +95,8 @@ class PDFGenerator:
         try:
             f = float(value)
             if f == 0:
-                return "0 ETF"
-            return f"{f:.8f}".rstrip('0').rstrip('.') + " ETF"
+                return "0 USD"
+            return f"{f:.8f}".rstrip('0').rstrip('.') + " USD"
         except (ValueError, TypeError):
             return "not specified"
 
@@ -122,7 +122,7 @@ class PDFGenerator:
 
         # Дело
         case_number = case_data.get('case_number', 'N/A')
-        story.append(Paragraph(f"in case No. {case_number}", self.styles['CustomHeading']))
+        story.append(Paragraph(f"Case No. {case_number}", self.styles['CustomHeading']))
 
         current_date = datetime.now().strftime("%d.%m.%Y")
         story.append(Paragraph(f"Date: {current_date}", self.styles['Custom']))
@@ -211,7 +211,7 @@ class PDFGenerator:
         # Логика по сумме
         claim_amount_raw = case_data.get('claim_amount')
 
-        if verdict.get('claim_satisfied') and awarded_raw not in (None, 0):
+        if verdict.get('claim_granted') and awarded_raw not in (None, 0):
             if claim_amount_raw is not None:
                 try:
                     if awarded_raw < float(claim_amount_raw):

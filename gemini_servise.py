@@ -146,7 +146,7 @@ class GeminiService:
             claim_amount_text = "not specified"
         else:
             formatted = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.').strip()
-            claim_amount_text = f"{formatted} ETF" if formatted != "0" else "0 ETF"
+            claim_amount_text = f"{formatted} USD" if formatted != "0" else "0 USD"
 
         instruction = f"""You are an AI judge. You must issue a final, legally sound verdict IN ENGLISH.
 
@@ -182,7 +182,7 @@ class GeminiService:
           "violations": [...],
           "decision": "Full verdict text IN ENGLISH, mentioning the claim amount {claim_amount_text} and referencing specific chat messages if relevant",
           "verdict": {{
-              "claim_satisfied": true/false,
+              "claim_granted": true/false,
               "amount_awarded": number,
               "court_costs": number
           }},
@@ -200,7 +200,7 @@ class GeminiService:
       "violations": ["violation1", "violation2"],
       "decision": "Text of the final decision IN ENGLISH with references to chat evidence",
       "verdict": {
-          "claim_satisfied": true/false,
+          "claim_granted": true/false,
           "amount_awarded": number (amount awarded to plaintiff),
           "court_costs": number
       },
@@ -240,7 +240,7 @@ class GeminiService:
                 "violations": [],
                 "decision": "Failed to make decision due to error",
                 "verdict": {
-                    "claim_satisfied": False,
+                    "claim_granted": False,
                     "amount_awarded": 0,
                     "court_costs": 0
                 },
@@ -254,12 +254,12 @@ class GeminiService:
         Used as fallback if AI didn't specify winner
         """
         verdict = decision_data.get('verdict', {})
-        claim_satisfied = verdict.get('claim_satisfied', False)
+        claim_granted = verdict.get('claim_granted', False)
         amount_awarded = verdict.get('amount_awarded', 0)
 
-        if claim_satisfied and amount_awarded > 0:
+        if claim_granted and amount_awarded > 0:
             return "plaintiff"
-        elif claim_satisfied:
+        elif claim_granted:
             return "plaintiff"
         else:
             return "defendant"
@@ -336,9 +336,9 @@ class GeminiService:
         if raw_amount is None or raw_amount == 'not specified':
             claim_text = "not specified"
         else:
-            claim_text = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.') + " ETF"
+            claim_text = f"{float(raw_amount):,.8f}".rstrip('0').rstrip('.') + " USD"
             if claim_text.endswith('.'):
-                claim_text = claim_text[:-1] + " ETF"
+                claim_text = claim_text[:-1] + " USD"
 
         # Separate chat history from other evidence
         chat_history = [ev for ev in evidence if ev.get("type") == "chat_history"]
@@ -369,13 +369,15 @@ class GeminiService:
             for i, ev in enumerate(chat_history, 1):
                 role_text = "Plaintiff" if ev.get("role") == "plaintiff" else "Defendant"
                 content = ev.get('content', ev.get('description', ''))
-                messages.append(
-                    f"\n📱 CHAT HISTORY #{i} (Provided by {role_text}):\n"
-                    f"{'-' * 80}\n"
-                    f"{content}\n"
-                    f"{'-' * 80}\n"
-                    f"[This chat correspondence is PRIMARY EVIDENCE. Extract key facts, dates, agreements, and disputes from these messages.]\n\n"
-                )
+
+                if content and content.strip():
+                    messages.append(
+                        f"\n📱 CHAT HISTORY #{i} (Provided by {role_text}):\n"
+                        f"{'-' * 80}\n"
+                        f"{content}\n"
+                        f"{'-' * 80}\n"
+                        f"[This chat correspondence is PRIMARY EVIDENCE. Extract key facts, dates, agreements, and disputes from these messages.]\n\n"
+                    )
 
             messages.append("=" * 80 + "\n")
             messages.append("END OF CHAT HISTORY\n")
@@ -489,7 +491,7 @@ class GeminiService:
                     "violations": [],
                     "decision": response_text,
                     "verdict": {
-                        "claim_satisfied": False,
+                        "claim_granted": False,
                         "amount_awarded": 0,
                         "court_costs": 0
                     },
@@ -501,7 +503,7 @@ class GeminiService:
                 "violations": [],
                 "decision": response_text,
                 "verdict": {
-                    "claim_satisfied": False,
+                    "claim_granted": False,
                     "amount_awarded": 0,
                     "court_costs": 0
                 },
