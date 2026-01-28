@@ -1061,7 +1061,7 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
             await message.bot.send_message(
                 case["plaintiff_id"],
                 f"✅ <b>Both sides have finished presenting arguments!</b>\n\n"
-                f"📋 Case #{case_number}\n\n"
+                f"📋 Update on Case #{case_number}\n\n"
                 f"🤖 The AI Judge will now review all evidence and may ask clarifying questions.\n\n"
                 f"⏳ Please wait...",
                 reply_markup=kb,
@@ -1084,7 +1084,7 @@ async def defendant_arguments_handler(message: types.Message, state: FSMContext)
             try:
                 await message.bot.send_message(
                     case["chat_id"],
-                    f"📋 Case #{case_number}\n"
+                    f"📋 Update on Case #{case_number}\n"
                     f"✅ Both sides have finished presenting arguments.\n"
                     f"🤖 AI Judge is reviewing the case..."
                 )
@@ -1243,7 +1243,7 @@ async def check_and_ask_ai_questions(message: types.Message, state: FSMContext, 
         try:
             await message.bot.send_message(
                 case["chat_id"],
-                f"Case #{case_number}\n"
+                f"Update on Case #{case_number}\n"
                 f"✅ AI judge is asking additional questions to the {role_text.lower()}."
             )
         except:
